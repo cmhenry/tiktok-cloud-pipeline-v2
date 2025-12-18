@@ -3,15 +3,20 @@ Name: tt_15_transfer_sound.py
 Date: Nov 17. 2025
 Author: BG
 Purpose: transfer sounds from AWS
+
+Modified for pipeline integration - uses shared config module.
 """
 
 import sys, time, os
 import logging
+import logging.handlers
 import requests, json
 import subprocess
 import re
 from filelock import FileLock
 import redis
+
+from config import AWS, TRANSFER_LOCKS, REDIS, PATHS, LOGGING
 
 ### Utils ###
 
@@ -414,23 +419,24 @@ def transfer_sound_zrh(source_path, dest_path, source_host = None, secure = True
             remove_lock_file(lock_path)
             return False
 
-###### To fill #####
+###### Configuration from shared config module #####
 
-# Redis for pipeline queue
-REDIS_HOST = "localhost"
-REDIS_PORT = 6379
-QUEUE_UNPACK = "list:unpack"
+# Redis for pipeline queue (from config.py)
+REDIS_HOST = REDIS["HOST"]
+REDIS_PORT = REDIS["PORT"]
+QUEUE_UNPACK = REDIS["QUEUES"]["UNPACK"]
 
-ROOT_PATH = "/home/ubuntu"
-LOG_FOLDER = f"{ROOT_PATH}/logs"
-DEST_FOLDER = f"{ROOT_PATH}/export_sound"
-SSH_CONFIG_FILE = f"{ROOT_PATH}/.ssh/ssh_config"
-TRANSFER_LOCK_FOLDER = f"{ROOT_PATH}/transfer_locks/logs"
+# Paths (from config.py)
+LOG_FOLDER = str(LOGGING["DIR"])
+DEST_FOLDER = str(PATHS["INCOMING_DIR"])
+SSH_CONFIG_FILE = str(AWS["SSH_CONFIG_FILE"])
+TRANSFER_LOCK_FOLDER = str(TRANSFER_LOCKS["DIR"])
 
-for tmp_folder in [LOG_FOLDER, DEST_FOLDER, os.path.dirname(SSH_CONFIG_FILE, TRANSFER_LOCK_FOLDER)]: 
+# Ensure directories exist
+for tmp_folder in [LOG_FOLDER, DEST_FOLDER, TRANSFER_LOCK_FOLDER]:
     os.makedirs(tmp_folder, exist_ok=True)
 
-# Write this to SSH_CONFIG_FILE after fixing the pathcs and adding private key to AWS
+# Write this to SSH_CONFIG_FILE after fixing the paths and adding private key to AWS
 # Make sure to give proper rights: chmod 600 $SSH_CONFIG_FILE
 # Host tt-zrh
 #     HostName ec2-54-172-69-64.compute-1.amazonaws.com
@@ -439,7 +445,7 @@ for tmp_folder in [LOG_FOLDER, DEST_FOLDER, os.path.dirname(SSH_CONFIG_FILE, TRA
 #     StrictHostKeyChecking accept-new
 #     IdentityFile /tiktok_kubernetes/.ssh/id_rsa_ec2
 
-###### To fill #####
+###### End configuration #####
 
 DEBUG = True
 INTERACTIVE = hasattr(sys, 'ps1')
@@ -447,11 +453,11 @@ INTERACTIVE = hasattr(sys, 'ps1')
 TO_SDTOUT = False
 if INTERACTIVE:
 	TO_SDTOUT = True
-# This is where the video are on the VM
-SOURCE_FOLDER = "/mnt/hub/export/sound"
+# This is where the audio files are on the AWS VM (from config.py)
+SOURCE_FOLDER = AWS["SOURCE_DIR"]
 # The script is started once every hour five minutes after the hour
 MINUTE_TO_RESTART_SCRIPT = 5
-AWS_CONTENT_VM_HOST = "tt-zrh"
+AWS_CONTENT_VM_HOST = AWS["HOST"]
 
 start_hour = time.gmtime().tm_hour
 
@@ -511,9 +517,14 @@ while not (start_hour != time.gmtime().tm_hour and time.gmtime().tm_min >= MINUT
 				# Transfer failed; skip verification & removal
 				files_skipped += 1
 				continue
-			else: 
+			else:
 				files_copied += 1
-	
+				# Queue for unpacking pipeline
+				if redis_client:
+					archive_path = os.path.join(DEST_FOLDER, os.path.basename(source_file))
+					redis_client.lpush(QUEUE_UNPACK, archive_path)
+					log_message(f"\t\tQueued for unpacking: {os.path.basename(source_file)}", logger)
+
 	if files_copied + files_skipped:
 		log_message(f"\t\tComplete for Sound\t{files_copied} + {files_skipped}\t in {time.time() - start_time:.2f} secs\n\n", logger)
 	
