@@ -6,54 +6,66 @@
 - Phase 3 (Transfer Worker): COMPLETE
 - Phase 4 (Unpack Worker): COMPLETE
 - Phase 5 (GPU Worker): COMPLETE
+- Phase 6 (Deployment): COMPLETE
 
 ## What Was Done This Iteration
-Created `gpu_worker.py` with all required features:
-- WhisperX large-v2 transcription with float16 compute
-- Gemma-2-9B + CoPE-A LoRA with 8-bit quantization (fits 24GB VRAM)
-- Batch collection from Redis `list:transcribe` queue (batch size 32)
-- Robust JSON parsing for malformed CoPE-A responses
-- DB writes: transcripts, classifications, status updates
-- VRAM monitoring logged after model load and periodically
-- Per-item error handling (failures don't crash the batch)
-- Status set to "flagged" or "transcribed" based on classification result
+Created all Phase 6 deployment artifacts in `deploy/`:
 
-## Next Steps (in order)
+**Systemd service files** (`deploy/systemd/`):
+- `transfer-worker.service` - For transfer VM
+- `unpack-worker.service` - For GPU worker VMs
+- `gpu-worker.service` - For GPU worker VMs (300s startup timeout for model loading)
 
-### 1. Phase 6: Deployment (HIGH PRIORITY)
-Create systemd service files and setup scripts:
+**Setup scripts** (`deploy/`):
+- `setup-coordinator.sh` - Installs Redis, Postgres, creates DB/user, runs schema
+- `setup-worker.sh` - Mounts volume, creates venv, installs deps, deploys services
 
-**Service files needed:**
-- `/etc/systemd/system/unpack-worker.service`
-- `/etc/systemd/system/gpu-worker.service`
-- `/etc/systemd/system/transfer-worker.service`
+**Monitoring** (`deploy/`):
+- `monitoring.sql` - 12 SQL queries for health checks, RA queue, errors, rates
+- `check-health.sh` - Combined script checking Redis queues + DB stats + noon target
 
-**Setup scripts needed:**
-- Coordinator VM setup (Redis, Postgres, schema migration)
-- Worker VM setup (mount volume, Python venv, GPU deps)
+## Next Steps
 
-**Monitoring:**
-- SQL queries for daily health check
-- Redis queue depth monitoring
+### Integration Testing
+All code is written. Next iteration should focus on testing with actual infrastructure:
 
-See SHARED_TASK_LIST.md Phase 6 for full outline.
+1. **Deploy coordinator VM**
+   - Run `deploy/setup-coordinator.sh`
+   - Verify Redis and Postgres are accessible from worker subnet
 
-## Dependencies
-```bash
-# All workers
-pip install redis psycopg2-binary python-magic
+2. **Deploy one worker VM**
+   - Run `deploy/setup-worker.sh COORDINATOR_IP=<ip>`
+   - Test unpack worker with a sample tar archive
+   - Test GPU worker with sample audio
 
-# GPU worker additional deps
-pip install whisperx transformers peft bitsandbytes
+3. **End-to-end test**
+   - Drop tar file in /mnt/data/incoming
+   - Push path to `list:unpack` queue
+   - Verify file flows through entire pipeline
 
-# Note: whisperx may require additional setup for ctranslate2
+### Optional Enhancements (lower priority)
+- Prometheus/Grafana metrics export
+- Slack/email alerts for noon target miss
+- Web dashboard for RA queue
+
+## File Structure
+```
+deploy/
+  systemd/
+    transfer-worker.service
+    unpack-worker.service
+    gpu-worker.service
+  setup-coordinator.sh
+  setup-worker.sh
+  monitoring.sql
+  check-health.sh
 ```
 
 ## Testing Notes
 - All workers syntax-verified with `python -m py_compile *.py`
-- Full integration requires:
-  - Redis running on coordinator VM
-  - Postgres with schema deployed
-  - Shared volume mounted at /mnt/data
-  - GPU with 24GB VRAM for gpu_worker
+- Integration test requires actual VMs with:
+  - Redis on coordinator
+  - Postgres with schema
+  - Shared volume at /mnt/data
+  - GPU (24GB VRAM) for gpu_worker
   - CoPE-A LoRA adapter at /models/cope-a-lora

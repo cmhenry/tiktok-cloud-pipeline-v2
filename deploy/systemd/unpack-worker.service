@@ -1,0 +1,22 @@
+[Unit]
+Description=Unpack Worker - Extracts archives and converts MP3 to Opus
+After=network.target
+
+[Service]
+Type=simple
+User=ubuntu
+WorkingDirectory=/opt/pipeline
+Environment=REDIS_HOST=10.0.0.1
+Environment=POSTGRES_HOST=10.0.0.1
+Environment=VOLUME_ROOT=/mnt/data
+ExecStart=/opt/pipeline/venv/bin/python unpack_worker.py
+Restart=always
+RestartSec=10
+
+# Logging
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=unpack-worker
+
+[Install]
+WantedBy=multi-user.target
