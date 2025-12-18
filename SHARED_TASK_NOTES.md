@@ -1,71 +1,48 @@
 # Task Notes for Next Iteration
 
 ## Current Status
-- Phase 1 (Shared Infrastructure): COMPLETE
-- Phase 2 (Database Migration): Pending deployment (ops task)
-- Phase 3 (Transfer Worker): COMPLETE
-- Phase 4 (Unpack Worker): COMPLETE
-- Phase 5 (GPU Worker): COMPLETE
-- Phase 6 (Deployment): COMPLETE
 
-## What Was Done This Iteration
-Created all Phase 6 deployment artifacts in `deploy/`:
+**ALL PHASES COMPLETE** - The audio processing pipeline codebase is fully implemented.
 
-**Systemd service files** (`deploy/systemd/`):
-- `transfer-worker.service` - For transfer VM
-- `unpack-worker.service` - For GPU worker VMs
-- `gpu-worker.service` - For GPU worker VMs (300s startup timeout for model loading)
+| Phase | Status |
+|-------|--------|
+| Phase 1 (Shared Infrastructure) | COMPLETE |
+| Phase 2 (Database Schema) | COMPLETE |
+| Phase 3 (Transfer Worker) | COMPLETE |
+| Phase 4 (Unpack Worker) | COMPLETE |
+| Phase 5 (GPU Worker) | COMPLETE |
+| Phase 6 (Deployment) | COMPLETE |
 
-**Setup scripts** (`deploy/`):
-- `setup-coordinator.sh` - Installs Redis, Postgres, creates DB/user, runs schema
-- `setup-worker.sh` - Mounts volume, creates venv, installs deps, deploys services
+## Project Files Summary
+```
+Workers:
+  config.py          - Central configuration
+  utils.py           - Logging, Redis client, archive detection
+  db.py              - PostgreSQL connection pool and CRUD
+  schema.sql         - Database tables, indexes, views
+  transfer_sounds.py - AWS transfer with Redis queue integration
+  unpack_worker.py   - Archive extraction + MP3→Opus conversion
+  gpu_worker.py      - WhisperX transcription + CoPE-A classification
 
-**Monitoring** (`deploy/`):
-- `monitoring.sql` - 12 SQL queries for health checks, RA queue, errors, rates
-- `check-health.sh` - Combined script checking Redis queues + DB stats + noon target
+Deployment:
+  deploy/setup-coordinator.sh  - Redis + Postgres setup
+  deploy/setup-worker.sh       - Worker VM setup
+  deploy/check-health.sh       - Health monitoring script
+  deploy/monitoring.sql        - 12 SQL queries for ops
+  deploy/systemd/*.service     - Systemd unit files
+```
 
-## Next Steps
+## What Remains: Operational Deployment
 
-### Integration Testing
-All code is written. Next iteration should focus on testing with actual infrastructure:
+The codebase is complete. What remains is **ops work** requiring actual infrastructure:
 
-1. **Deploy coordinator VM**
-   - Run `deploy/setup-coordinator.sh`
-   - Verify Redis and Postgres are accessible from worker subnet
+1. **Provision VMs** (coordinator + 3 GPU workers + 1 transfer)
+2. **Deploy coordinator** - run `deploy/setup-coordinator.sh`
+3. **Deploy workers** - run `deploy/setup-worker.sh COORDINATOR_IP=<ip>`
+4. **Integration test** - drop tar in queue, verify end-to-end flow
+5. **Production monitoring** - set up noon target alerts
 
-2. **Deploy one worker VM**
-   - Run `deploy/setup-worker.sh COORDINATOR_IP=<ip>`
-   - Test unpack worker with a sample tar archive
-   - Test GPU worker with sample audio
-
-3. **End-to-end test**
-   - Drop tar file in /mnt/data/incoming
-   - Push path to `list:unpack` queue
-   - Verify file flows through entire pipeline
-
-### Optional Enhancements (lower priority)
+## Optional Future Enhancements
 - Prometheus/Grafana metrics export
 - Slack/email alerts for noon target miss
 - Web dashboard for RA queue
-
-## File Structure
-```
-deploy/
-  systemd/
-    transfer-worker.service
-    unpack-worker.service
-    gpu-worker.service
-  setup-coordinator.sh
-  setup-worker.sh
-  monitoring.sql
-  check-health.sh
-```
-
-## Testing Notes
-- All workers syntax-verified with `python -m py_compile *.py`
-- Integration test requires actual VMs with:
-  - Redis on coordinator
-  - Postgres with schema
-  - Shared volume at /mnt/data
-  - GPU (24GB VRAM) for gpu_worker
-  - CoPE-A LoRA adapter at /models/cope-a-lora
