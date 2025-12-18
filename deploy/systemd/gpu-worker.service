@@ -1,0 +1,26 @@
+[Unit]
+Description=GPU Worker - WhisperX transcription and CoPE-A classification
+After=network.target
+
+[Service]
+Type=simple
+User=ubuntu
+WorkingDirectory=/opt/pipeline
+Environment=REDIS_HOST=10.0.0.1
+Environment=POSTGRES_HOST=10.0.0.1
+Environment=VOLUME_ROOT=/mnt/data
+Environment=CUDA_VISIBLE_DEVICES=0
+ExecStart=/opt/pipeline/venv/bin/python gpu_worker.py
+Restart=always
+RestartSec=30
+
+# Give GPU worker more time to load models before restart
+TimeoutStartSec=300
+
+# Logging
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=gpu-worker
+
+[Install]
+WantedBy=multi-user.target

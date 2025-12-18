@@ -1,0 +1,22 @@
+[Unit]
+Description=Transfer Worker - Downloads archives from AWS EC2
+After=network.target
+
+[Service]
+Type=simple
+User=ubuntu
+WorkingDirectory=/opt/pipeline
+Environment=REDIS_HOST=10.0.0.1
+Environment=POSTGRES_HOST=10.0.0.1
+Environment=VOLUME_ROOT=/mnt/data
+ExecStart=/opt/pipeline/venv/bin/python transfer_sounds.py
+Restart=always
+RestartSec=30
+
+# Logging
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=transfer-worker
+
+[Install]
+WantedBy=multi-user.target

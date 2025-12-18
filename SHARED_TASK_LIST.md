@@ -27,12 +27,12 @@ Build a distributed audio processing pipeline for content moderation research. T
 
 - [x] Transfer script from collaborator (transfer_sounds.py)
 - [x] Architecture design complete
-- [ ] Shared infrastructure (config, utils, db, schema)
-- [ ] Database schema and migrations
-- [ ] Transfer worker integration
-- [ ] Unpack worker (tar extraction, MP3→Opus)
-- [ ] GPU worker (WhisperX + CoPE-A)
-- [ ] Deployment and systemd services
+- [x] Shared infrastructure (config, utils, db, schema)
+- [x] Database schema and migrations
+- [x] Transfer worker integration
+- [x] Unpack worker (tar extraction, MP3→Opus)
+- [x] GPU worker (WhisperX + CoPE-A)
+- [x] Deployment and systemd services
 
 ---
 
