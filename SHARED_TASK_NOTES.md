@@ -4,36 +4,40 @@
 - Phase 1 (Shared Infrastructure): COMPLETE
 - Phase 2 (Database Migration): Pending deployment (ops task)
 - Phase 3 (Transfer Worker): COMPLETE
+- Phase 4 (Unpack Worker): COMPLETE
 
 ## What Was Done This Iteration
-Modified `transfer_sounds.py` to use shared config:
-- Imports `AWS`, `TRANSFER_LOCKS`, `REDIS`, `PATHS`, `LOGGING` from `config.py`
-- Fixed bug on line 430 (invalid `os.path.dirname` call with multiple args)
-- Added Redis queue push after successful transfer (pushes to `list:unpack`)
-- Verified syntax and imports work correctly
+Created `unpack_worker.py` with all required features:
+- Main loop consuming from Redis `list:unpack` queue
+- Content-based archive detection (handles mislabeled `.tar.gz` that are actually plain tar)
+- Parallel MP3→Opus conversion using ProcessPoolExecutor (4 workers)
+- Audio duration detection via ffprobe
+- Bulk DB inserts via `bulk_insert_audio_files`
+- Queues items for GPU worker via Redis `list:transcribe`
+- Cleanup of temp extraction directories
+- Archive moved to processed directory after completion
+- Error handling with failed archives pushed to `list:failed` queue
 
 ## Next Steps (in order)
 
-### 1. Phase 4: Unpack Worker (HIGH PRIORITY)
-Create `unpack_worker.py`:
-- Skeleton outline in SHARED_TASK_LIST.md Phase 4.1
-- Key features:
-  - Content-based archive detection (use `utils.detect_archive_type`)
-  - Handle mislabeled `.tar.gz` files that are actually plain tar
-  - Parallel ffmpeg MP3→Opus conversion using ProcessPoolExecutor
-  - Bulk DB inserts via `db.bulk_insert_audio_files`
-  - Queue items for GPU worker via Redis `list:transcribe`
-  - Cleanup temp directories after processing
-
-### 2. Phase 5: GPU Worker
+### 1. Phase 5: GPU Worker (HIGH PRIORITY)
 Create `gpu_worker.py`:
-- WhisperX for transcription
-- Gemma-2-9B + CoPE-A LoRA for classification
+- WhisperX for transcription (large-v2 model)
+- Gemma-2-9B + CoPE-A LoRA for classification (8-bit quantization)
+- Batch collection from Redis `list:transcribe` queue
+- DB writes for transcripts and classifications
 - See SHARED_TASK_LIST.md Phase 5.1 for full outline
 
-### 3. Phase 6: Deployment
-- Systemd service files
+Key implementation details:
+- Both models must fit in 24GB VRAM - use 8-bit quantization
+- CoPE-A JSON responses may be malformed - handle parsing errors
+- Process batches of 32 files
+- Update audio status to "flagged" or "transcribed" based on classification
+
+### 2. Phase 6: Deployment
+- Systemd service files for unpack-worker and gpu-worker
 - Coordinator/worker VM setup scripts
+- Monitoring queries
 
 ## Dependencies
 ```bash
@@ -42,5 +46,6 @@ pip install redis psycopg2-binary python-magic
 ```
 
 ## Testing Notes
-- Transfer worker can be tested with `python -m py_compile transfer_sounds.py`
+- Unpack worker: `python -m py_compile unpack_worker.py` (verified working)
 - Full integration requires Redis running on coordinator VM
+- Test unpack worker with a sample tar archive containing MP3s
