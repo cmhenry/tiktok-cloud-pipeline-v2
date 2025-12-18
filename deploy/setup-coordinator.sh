@@ -21,6 +21,7 @@ echo "[2/6] Configuring Redis..."
 
 # Backup original config
 cp /etc/redis/redis.conf /etc/redis/redis.conf.backup
+mkdir /etc/redis/redis.conf.d/
 
 # Configure Redis for network access
 cat > /etc/redis/redis.conf.d/pipeline.conf <<EOF
