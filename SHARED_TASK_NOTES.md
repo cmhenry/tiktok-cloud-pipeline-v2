@@ -5,47 +5,55 @@
 - Phase 2 (Database Migration): Pending deployment (ops task)
 - Phase 3 (Transfer Worker): COMPLETE
 - Phase 4 (Unpack Worker): COMPLETE
+- Phase 5 (GPU Worker): COMPLETE
 
 ## What Was Done This Iteration
-Created `unpack_worker.py` with all required features:
-- Main loop consuming from Redis `list:unpack` queue
-- Content-based archive detection (handles mislabeled `.tar.gz` that are actually plain tar)
-- Parallel MP3→Opus conversion using ProcessPoolExecutor (4 workers)
-- Audio duration detection via ffprobe
-- Bulk DB inserts via `bulk_insert_audio_files`
-- Queues items for GPU worker via Redis `list:transcribe`
-- Cleanup of temp extraction directories
-- Archive moved to processed directory after completion
-- Error handling with failed archives pushed to `list:failed` queue
+Created `gpu_worker.py` with all required features:
+- WhisperX large-v2 transcription with float16 compute
+- Gemma-2-9B + CoPE-A LoRA with 8-bit quantization (fits 24GB VRAM)
+- Batch collection from Redis `list:transcribe` queue (batch size 32)
+- Robust JSON parsing for malformed CoPE-A responses
+- DB writes: transcripts, classifications, status updates
+- VRAM monitoring logged after model load and periodically
+- Per-item error handling (failures don't crash the batch)
+- Status set to "flagged" or "transcribed" based on classification result
 
 ## Next Steps (in order)
 
-### 1. Phase 5: GPU Worker (HIGH PRIORITY)
-Create `gpu_worker.py`:
-- WhisperX for transcription (large-v2 model)
-- Gemma-2-9B + CoPE-A LoRA for classification (8-bit quantization)
-- Batch collection from Redis `list:transcribe` queue
-- DB writes for transcripts and classifications
-- See SHARED_TASK_LIST.md Phase 5.1 for full outline
+### 1. Phase 6: Deployment (HIGH PRIORITY)
+Create systemd service files and setup scripts:
 
-Key implementation details:
-- Both models must fit in 24GB VRAM - use 8-bit quantization
-- CoPE-A JSON responses may be malformed - handle parsing errors
-- Process batches of 32 files
-- Update audio status to "flagged" or "transcribed" based on classification
+**Service files needed:**
+- `/etc/systemd/system/unpack-worker.service`
+- `/etc/systemd/system/gpu-worker.service`
+- `/etc/systemd/system/transfer-worker.service`
 
-### 2. Phase 6: Deployment
-- Systemd service files for unpack-worker and gpu-worker
-- Coordinator/worker VM setup scripts
-- Monitoring queries
+**Setup scripts needed:**
+- Coordinator VM setup (Redis, Postgres, schema migration)
+- Worker VM setup (mount volume, Python venv, GPU deps)
+
+**Monitoring:**
+- SQL queries for daily health check
+- Redis queue depth monitoring
+
+See SHARED_TASK_LIST.md Phase 6 for full outline.
 
 ## Dependencies
 ```bash
+# All workers
 pip install redis psycopg2-binary python-magic
-# GPU workers also need: whisperx transformers peft bitsandbytes
+
+# GPU worker additional deps
+pip install whisperx transformers peft bitsandbytes
+
+# Note: whisperx may require additional setup for ctranslate2
 ```
 
 ## Testing Notes
-- Unpack worker: `python -m py_compile unpack_worker.py` (verified working)
-- Full integration requires Redis running on coordinator VM
-- Test unpack worker with a sample tar archive containing MP3s
+- All workers syntax-verified with `python -m py_compile *.py`
+- Full integration requires:
+  - Redis running on coordinator VM
+  - Postgres with schema deployed
+  - Shared volume mounted at /mnt/data
+  - GPU with 24GB VRAM for gpu_worker
+  - CoPE-A LoRA adapter at /models/cope-a-lora
