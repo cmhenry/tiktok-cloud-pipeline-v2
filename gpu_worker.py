@@ -8,8 +8,6 @@ for audio files. Runs on GPU VMs with L4 24GB VRAM.
 import json
 import re
 import traceback
-from typing import Optional
-
 import torch
 import whisperx
 from transformers import AutoModelForCausalLM, AutoTokenizer, BitsAndBytesConfig
@@ -40,6 +38,7 @@ class GPUWorker:
         self.whisper_model = None
         self.cope_model = None
         self.cope_tokenizer = None
+        self.policy_template = None
 
         if self.device == "cpu":
             logger.warning("CUDA not available - running on CPU (slow)")
@@ -47,6 +46,12 @@ class GPUWorker:
     def initialize_models(self):
         """Load models at startup. Must be called before processing."""
         logger.info("Initializing GPU worker models...")
+
+        # Load CoPE-A policy template
+        policy_path = PROCESSING["COPE_POLICY"]
+        logger.info(f"Loading CoPE-A policy from {policy_path}")
+        with open(policy_path, "r") as f:
+            self.policy_template = f.read()
 
         # Initialize WhisperX
         logger.info(f"Loading WhisperX {PROCESSING['WHISPERX_MODEL']}...")
@@ -139,7 +144,11 @@ class GPUWorker:
 
     def classify(self, transcript: str) -> dict:
         """
-        Classify transcript for harmful content using CoPE-A.
+        Classify transcript for harmful content using CoPE-A with policy file.
+
+        Uses the policy template loaded from tiktok_policy.txt which defines
+        the classification criteria for reportable content (harassment, hate
+        speech, violence, sexual exploitation).
 
         Args:
             transcript: Transcribed text to classify
@@ -150,24 +159,20 @@ class GPUWorker:
         if not transcript or not transcript.strip():
             return {"flagged": False, "score": 0.0, "category": None}
 
-        # CoPE-A prompt format
-        prompt = f"""Analyze this transcript for harmful content including hate speech, violence, harassment, self-harm, illegal activities, or exploitation.
-
-Transcript: "{transcript}"
-
-Respond with JSON only: {{"flagged": true/false, "score": 0.0-1.0, "category": "category or null"}}"""
+        # Format prompt using policy template with content placeholder
+        prompt = self.policy_template.format(content_text=transcript)
 
         inputs = self.cope_tokenizer(
             prompt,
             return_tensors="pt",
             truncation=True,
-            max_length=2048,
+            max_length=8192,  # CoPE-A supports 8K tokens
         ).to(self.cope_model.device)
 
         with torch.no_grad():
             outputs = self.cope_model.generate(
                 **inputs,
-                max_new_tokens=100,
+                max_new_tokens=2,  # Binary output: "0" or "1"
                 do_sample=False,
                 pad_token_id=self.cope_tokenizer.pad_token_id,
             )
@@ -176,54 +181,38 @@ Respond with JSON only: {{"flagged": true/false, "score": 0.0-1.0, "category": "
         response = self.cope_tokenizer.decode(
             outputs[0][inputs["input_ids"].shape[1]:],
             skip_special_tokens=True
-        )
+        ).strip()
 
         return self._parse_classification_response(response)
 
     def _parse_classification_response(self, response: str) -> dict:
         """
-        Parse CoPE-A JSON response, handling malformed output gracefully.
+        Parse CoPE-A binary response ("0" or "1").
+
+        CoPE-A outputs:
+        - "0": Content does not match any policy labels (safe)
+        - "1": Content matches one or more policy labels (flagged)
 
         Args:
-            response: Raw model output
+            response: Raw model output (should be "0" or "1")
 
         Returns:
-            Parsed classification dict
+            Parsed classification dict with flagged, score, and category
         """
-        default_result = {"flagged": False, "score": 0.0, "category": None}
+        # Extract first digit from response
+        digit_match = re.search(r'[01]', response)
 
-        try:
-            # Try to find JSON in response
-            json_match = re.search(r'\{[^}]+\}', response)
-            if not json_match:
-                logger.warning(f"No JSON found in response: {response[:100]}")
-                return default_result
+        if not digit_match:
+            logger.warning(f"Unexpected CoPE-A response: {response[:50]}")
+            return {"flagged": False, "score": 0.0, "category": None}
 
-            json_str = json_match.group()
-            data = json.loads(json_str)
+        flagged = digit_match.group() == "1"
 
-            # Validate and normalize fields
-            flagged = bool(data.get("flagged", False))
-            score = float(data.get("score", 0.0))
-            score = min(1.0, max(0.0, score))  # Clamp to 0-1
-            category = data.get("category")
-
-            # Handle various null representations
-            if category in (None, "null", "None", ""):
-                category = None
-
-            return {
-                "flagged": flagged,
-                "score": score,
-                "category": category,
-            }
-
-        except json.JSONDecodeError as e:
-            logger.warning(f"Failed to parse JSON: {e}, response: {response[:100]}")
-            return default_result
-        except (ValueError, TypeError) as e:
-            logger.warning(f"Invalid values in response: {e}")
-            return default_result
+        return {
+            "flagged": flagged,
+            "score": 1.0 if flagged else 0.0,
+            "category": "reportable_content" if flagged else None,
+        }
 
     def process_item(self, item: dict) -> bool:
         """
