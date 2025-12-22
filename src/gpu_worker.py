@@ -3,23 +3,38 @@ Audio Processing Pipeline - GPU Worker
 
 Handles transcription (WhisperX) and classification (CoPE-A with Gemma-2-9B)
 for audio files. Runs on GPU VMs with L4 24GB VRAM.
+
+S3 Flow:
+1. Pop JSON job from queue:transcribe (batch_id, opus_path, original_filename)
+2. Transcribe + classify audio
+3. Insert to database (get audio_id)
+4. Upload opus to S3 processed/{date}/{audio_id}.opus
+5. Update DB with S3 path
+6. Track batch progress with Redis atomic counter
+7. Cleanup scratch when batch completes
 """
 
 import json
 import re
 import traceback
+from datetime import datetime
+from pathlib import Path
+
 import torch
 import whisperx
 from transformers import AutoModelForCausalLM, AutoTokenizer, BitsAndBytesConfig
 from peft import PeftModel
 
-from config import REDIS, PROCESSING, ensure_paths_exist
-from utils import setup_logger, get_redis_client
-from db import (
+from .config import REDIS, PROCESSING, LOCAL
+from .utils import setup_logger, get_redis_client
+from .s3_utils import upload_opus, cleanup_scratch
+from .db import (
     get_db_pool,
+    insert_audio_file,
     insert_transcript,
     insert_classification,
     update_audio_status,
+    update_audio_s3_path,
 )
 
 logger = setup_logger("gpu_worker")
@@ -31,14 +46,17 @@ class GPUWorker:
 
     Loads WhisperX large-v2 for transcription and Gemma-2-9B with CoPE-A LoRA
     for content classification. Both models use optimizations to fit in 24GB VRAM.
+
+    Handles S3 upload of processed files and batch completion tracking.
     """
 
-    def __init__(self):
+    def __init__(self, redis_client=None):
         self.device = "cuda" if torch.cuda.is_available() else "cpu"
         self.whisper_model = None
         self.cope_model = None
         self.cope_tokenizer = None
         self.policy_template = None
+        self.redis_client = redis_client
 
         if self.device == "cpu":
             logger.warning("CUDA not available - running on CPU (slow)")
@@ -216,22 +234,47 @@ class GPUWorker:
 
     def process_item(self, item: dict) -> bool:
         """
-        Process a single audio file: transcribe, classify, and update DB.
+        Process a single audio file: transcribe, classify, upload to S3, track batch.
+
+        New S3 Flow:
+        1. Transcribe + classify (unchanged)
+        2. Insert to database (NEW - get audio_id)
+        3. Upload opus to S3 (NEW)
+        4. Update DB with S3 path (NEW)
+        5. Track batch progress (NEW)
 
         Args:
-            item: Dict with keys: audio_id, opus_path, original_filename
+            item: Dict with keys: batch_id, opus_path, original_filename
 
         Returns:
             True if processed successfully, False otherwise
         """
-        audio_id = item["audio_id"]
-        opus_path = item["opus_path"]
+        batch_id = item["batch_id"]
+        opus_path = Path(item["opus_path"])
+        original_filename = item["original_filename"]
+
+        audio_id = None  # Track for error handling
 
         try:
-            # Transcribe
-            logger.debug(f"Transcribing {audio_id}: {opus_path}")
-            transcript = self.transcribe(opus_path)
+            # 1. Transcribe
+            logger.debug(f"Transcribing: {opus_path.name}")
+            transcript = self.transcribe(str(opus_path))
 
+            # 2. Classify
+            logger.debug(f"Classifying: {opus_path.name}")
+            classification = self.classify(transcript["text"])
+
+            # 3. Insert audio file record to database (NEW - get audio_id)
+            file_size = opus_path.stat().st_size if opus_path.exists() else 0
+            audio_id = insert_audio_file(
+                original_filename=original_filename,
+                opus_path=str(opus_path),  # Local scratch path (temporary)
+                archive_source=batch_id,
+                duration_seconds=None,  # Could extract from WhisperX if needed
+                file_size_bytes=file_size,
+            )
+
+            # 4. Insert transcript
             insert_transcript(
                 audio_id,
                 transcript["text"],
@@ -239,10 +282,7 @@ class GPUWorker:
                 transcript["confidence"],
             )
 
-            # Classify
-            logger.debug(f"Classifying {audio_id}")
-            classification = self.classify(transcript["text"])
-
+            # 5. Insert classification
             insert_classification(
                 audio_id,
                 classification["flagged"],
@@ -250,25 +290,94 @@ class GPUWorker:
                 classification["category"],
             )
 
-            # Update status
+            # 6. Update status
             status = "flagged" if classification["flagged"] else "transcribed"
             update_audio_status(audio_id, status)
 
+            # 7. Upload opus to S3 (NEW)
+            date_str = datetime.utcnow().strftime("%Y-%m-%d")
+            s3_opus_key = upload_opus(opus_path, audio_id, date_str)
+
+            # 8. Update DB with S3 path (NEW)
+            update_audio_s3_path(audio_id, s3_opus_key)
+
             logger.debug(
                 f"Processed {audio_id}: status={status}, "
-                f"score={classification['score']:.2f}"
+                f"score={classification['score']:.2f}, s3={s3_opus_key}"
             )
+
+            # 9. Track batch progress (NEW)
+            self.track_batch_progress(batch_id)
+
             return True
 
         except Exception as e:
             logger.error(
-                f"Failed processing {audio_id}: {e}\n{traceback.format_exc()}"
+                f"Failed processing {opus_path}: {e}\n{traceback.format_exc()}"
             )
-            try:
-                update_audio_status(audio_id, "failed")
-            except Exception:
-                pass
+            # Mark as failed in DB if we have an audio_id
+            if audio_id is not None:
+                try:
+                    update_audio_status(audio_id, "failed")
+                except Exception:
+                    pass
+            # Note: We don't increment batch counter for failed items
+            # This means batch may never "complete" if items fail
+            # Recommend periodic cleanup of old scratch directories
             return False
+
+    def track_batch_progress(self, batch_id: str):
+        """
+        Increment batch counter and trigger cleanup if complete.
+
+        Uses Redis atomic INCR so only one worker will see processed == total.
+
+        Args:
+            batch_id: Batch identifier
+        """
+        if self.redis_client is None:
+            logger.warning(f"No Redis client - skipping batch tracking for {batch_id}")
+            return
+
+        # Atomic increment - returns new value
+        processed = self.redis_client.incr(f"batch:{batch_id}:processed")
+
+        # Get total (set by unpack worker)
+        total_raw = self.redis_client.get(f"batch:{batch_id}:total")
+        if total_raw is None:
+            logger.warning(f"Batch {batch_id}: no total key found, skipping completion check")
+            return
+
+        total = int(total_raw)
+
+        logger.debug(f"Batch {batch_id}: {processed}/{total} processed")
+
+        # Check if this worker completed the batch
+        # Due to atomic INCR, only ONE worker will see processed == total
+        if processed >= total:
+            self.complete_batch(batch_id)
+
+    def complete_batch(self, batch_id: str):
+        """
+        Called when all items in batch are processed.
+
+        Cleans up scratch directory and Redis keys.
+
+        Args:
+            batch_id: Batch identifier
+        """
+        logger.info(f"Batch {batch_id} complete, cleaning up")
+
+        # Clean up scratch directory (idempotent)
+        cleanup_scratch(batch_id)
+
+        # Clean up Redis keys (idempotent - DELETE ignores missing keys)
+        if self.redis_client:
+            self.redis_client.delete(f"batch:{batch_id}:total")
+            self.redis_client.delete(f"batch:{batch_id}:processed")
+            self.redis_client.delete(f"batch:{batch_id}:s3_key")
+
+        logger.info(f"Batch {batch_id}: scratch cleaned, Redis keys removed")
 
     def process_batch(self, items: list[dict]) -> tuple[int, int]:
         """
@@ -293,8 +402,11 @@ class GPUWorker:
 
     def run(self):
         """Main loop - collect batches from Redis queue and process."""
-        redis_client = get_redis_client()
-        logger.info("GPU worker started, waiting for audio files...")
+        # Initialize redis client if not provided
+        if self.redis_client is None:
+            self.redis_client = get_redis_client()
+
+        logger.info("GPU worker started (S3 mode), waiting for audio files...")
 
         while True:
             batch = []
@@ -304,13 +416,13 @@ class GPUWorker:
             while len(batch) < PROCESSING["BATCH_SIZE"]:
                 if not batch:
                     # Block waiting for first item
-                    result = redis_client.brpop(
+                    result = self.redis_client.brpop(
                         REDIS["QUEUES"]["TRANSCRIBE"],
                         timeout=30
                     )
                 else:
                     # Non-blocking for subsequent items (timeout=0 doesn't block)
-                    result = redis_client.brpop(
+                    result = self.redis_client.brpop(
                         REDIS["QUEUES"]["TRANSCRIBE"],
                         timeout=1
                     )
@@ -321,9 +433,13 @@ class GPUWorker:
                 _, msg = result
                 try:
                     item = json.loads(msg)
+                    # Validate required fields
+                    if "batch_id" not in item or "opus_path" not in item:
+                        logger.error(f"Invalid job format, missing batch_id or opus_path: {msg[:100]}")
+                        continue
                     batch.append(item)
                 except json.JSONDecodeError as e:
-                    logger.error(f"Invalid message in queue: {e}")
+                    logger.error(f"Invalid JSON in queue: {e}")
 
             if batch:
                 logger.info(f"Processing batch of {len(batch)} files")
@@ -340,12 +456,17 @@ class GPUWorker:
 
 def main():
     """Entry point for GPU worker."""
-    ensure_paths_exist()
+    # Ensure scratch directory exists
+    LOCAL["SCRATCH_ROOT"].mkdir(parents=True, exist_ok=True)
 
     # Initialize database pool
     get_db_pool()
 
-    worker = GPUWorker()
+    # Initialize Redis client
+    redis_client = get_redis_client()
+
+    # Create and run worker
+    worker = GPUWorker(redis_client=redis_client)
     worker.initialize_models()
     worker.run()
 

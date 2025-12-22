@@ -222,6 +222,26 @@ def update_audio_status(audio_id: int, status: str):
             )
 
 
+def update_audio_s3_path(audio_id: int, s3_opus_path: str):
+    """
+    Update audio file record with S3 opus path after upload.
+
+    Args:
+        audio_id: Audio file record ID
+        s3_opus_path: S3 key (e.g., "processed/2025-06-22/123.opus")
+    """
+    with get_connection() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                UPDATE audio_files
+                SET s3_opus_path = %s
+                WHERE id = %s
+                """,
+                (s3_opus_path, audio_id)
+            )
+
+
 def get_pending_flagged(limit: int = 100) -> list[dict]:
     """
     Get flagged items awaiting RA review.

@@ -9,7 +9,7 @@
 | Phase 1 (S3 Utils + Config) | COMPLETE | s3_utils.py, config.py updated, boto3 added |
 | Phase 2 (Transfer Worker) | COMPLETE | S3 upload, JSON job payload, temp staging |
 | Phase 3 (Unpack Worker) | COMPLETE | S3 pull, batch tracking, scratch directory |
-| Phase 4 (GPU Worker) | NOT STARTED | S3 upload + cleanup |
+| Phase 4 (GPU Worker) | COMPLETE | S3 upload, batch tracking, scratch cleanup |
 | Phase 5 (Ansible Infra) | NOT STARTED | Volumes, models, credentials |
 | Phase 6 (Health Checks) | NOT STARTED | S3 + batch monitoring |
 
@@ -176,7 +176,48 @@ Note: `audio_id` removed from transcription job - GPU worker will:
 3. Update DB with S3 path
 
 ### Phase 4 Notes
-*(To be filled during implementation)*
+
+**Completed 2025-12-22**
+
+Files modified:
+- `src/gpu_worker.py` - S3 upload, batch tracking, new job format
+- `src/db.py` - Added `update_audio_s3_path()` function
+- `migrations/schema.sql` - Added `s3_opus_path` column, updated `ra_queue` view
+
+Key changes to gpu_worker.py:
+1. **Imports updated**: Added `s3_utils`, `insert_audio_file`, `update_audio_s3_path`, `LOCAL`, `Path`, `datetime`
+2. **Job format**: Now expects `{batch_id, opus_path, original_filename}` (no audio_id)
+3. **DB insert moved here**: GPU worker now calls `insert_audio_file()` to get audio_id
+4. **S3 upload**: After processing, uploads opus to `processed/{date}/{audio_id}.opus`
+5. **Batch tracking**: Atomic Redis INCR for `batch:{batch_id}:processed`
+6. **Batch completion**: When processed >= total, calls `complete_batch()`
+
+New methods added:
+- `track_batch_progress(batch_id)` - Increments counter, checks completion
+- `complete_batch(batch_id)` - Cleans scratch + Redis keys
+
+Process flow:
+```
+1. Transcribe audio (WhisperX)
+2. Classify transcript (CoPE-A)
+3. Insert audio_files record → get audio_id
+4. Insert transcript record
+5. Insert classification record
+6. Update status (flagged/transcribed)
+7. Upload opus to S3 → get s3_key
+8. Update audio_files.s3_opus_path
+9. INCR batch counter
+10. If batch complete → cleanup scratch + Redis keys
+```
+
+Failed item handling (Option A implemented):
+- Failed items don't increment batch counter
+- Batch may never "complete" if items fail
+- Recommend periodic cleanup: `find /data/scratch -maxdepth 1 -type d -mmin +120 -exec rm -rf {} +`
+
+Schema changes:
+- `audio_files.s3_opus_path TEXT` - S3 key for long-term storage
+- `ra_queue` view updated to include s3_opus_path
 
 ### Phase 5 Notes
 *(To be filled during implementation)*

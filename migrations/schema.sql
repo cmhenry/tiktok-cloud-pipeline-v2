@@ -17,6 +17,7 @@ CREATE TABLE IF NOT EXISTS audio_files (
     id SERIAL PRIMARY KEY,
     original_filename TEXT NOT NULL,
     opus_path TEXT NOT NULL UNIQUE,
+    s3_opus_path TEXT,                -- S3 key for long-term storage (processed/{date}/{id}.opus)
     archive_source TEXT,
     duration_seconds FLOAT,
     file_size_bytes INTEGER,
@@ -24,6 +25,9 @@ CREATE TABLE IF NOT EXISTS audio_files (
     processed_at TIMESTAMP,
     status TEXT DEFAULT 'pending'  -- pending, transcribed, flagged, reviewed, failed
 );
+
+-- Migration: Add s3_opus_path column if upgrading from previous schema
+-- ALTER TABLE audio_files ADD COLUMN IF NOT EXISTS s3_opus_path TEXT;
 
 -- Transcript storage
 CREATE TABLE IF NOT EXISTS transcripts (
@@ -67,6 +71,7 @@ SELECT
     af.id,
     af.original_filename,
     af.opus_path,
+    af.s3_opus_path,
     t.transcript_text,
     c.flag_score,
     c.flag_category,

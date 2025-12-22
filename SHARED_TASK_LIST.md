@@ -38,7 +38,7 @@ audio-pipeline/
 - [x] Configuration updates
 - [x] Transfer worker S3 upload
 - [x] Unpack worker S3 pull
-- [ ] GPU worker S3 upload + scratch cleanup
+- [x] GPU worker S3 upload + scratch cleanup
 - [ ] Ansible: GPU volume tasks
 - [ ] Ansible: Model sync tasks
 - [ ] Ansible: S3 credentials
@@ -314,11 +314,11 @@ if processed >= total:
 ```
 
 ### 4.4 Deliverables
-- [ ] Update `gpu_worker.py` with S3 opus upload
-- [ ] Batch completion detection with Redis atomic counters
-- [ ] Scratch cleanup on batch completion
-- [ ] Schema update for s3_opus_path
-- [ ] Handle edge cases (batch already cleaned, partial failures)
+- [x] Update `gpu_worker.py` with S3 opus upload
+- [x] Batch completion detection with Redis atomic counters
+- [x] Scratch cleanup on batch completion
+- [x] Schema update for s3_opus_path
+- [x] Handle edge cases (batch already cleaned, partial failures)
 
 ---
 
