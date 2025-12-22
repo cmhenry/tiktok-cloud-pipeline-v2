@@ -37,7 +37,7 @@ audio-pipeline/
 - [x] S3 utilities module
 - [x] Configuration updates
 - [x] Transfer worker S3 upload
-- [ ] Unpack worker S3 pull
+- [x] Unpack worker S3 pull
 - [ ] GPU worker S3 upload + scratch cleanup
 - [ ] Ansible: GPU volume tasks
 - [ ] Ansible: Model sync tasks
@@ -226,10 +226,10 @@ batch:{batch_id}:s3_key    = "archives/..."  # For cleanup reference
 ```
 
 ### 3.3 Deliverables
-- [ ] Update `unpack_worker.py` with S3 download
-- [ ] Batch tracking keys in Redis
-- [ ] Remove shared volume path references
-- [ ] Extraction to scratch directory
+- [x] Update `unpack_worker.py` with S3 download
+- [x] Batch tracking keys in Redis
+- [x] Remove shared volume path references
+- [x] Extraction to scratch directory
 
 ---
 

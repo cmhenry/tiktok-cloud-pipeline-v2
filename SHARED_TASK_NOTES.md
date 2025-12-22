@@ -8,7 +8,7 @@
 |-------|--------|-------|
 | Phase 1 (S3 Utils + Config) | COMPLETE | s3_utils.py, config.py updated, boto3 added |
 | Phase 2 (Transfer Worker) | COMPLETE | S3 upload, JSON job payload, temp staging |
-| Phase 3 (Unpack Worker) | NOT STARTED | S3 pull + batch tracking |
+| Phase 3 (Unpack Worker) | COMPLETE | S3 pull, batch tracking, scratch directory |
 | Phase 4 (GPU Worker) | NOT STARTED | S3 upload + cleanup |
 | Phase 5 (Ansible Infra) | NOT STARTED | Volumes, models, credentials |
 | Phase 6 (Health Checks) | NOT STARTED | S3 + batch monitoring |
@@ -130,7 +130,50 @@ Note: `file_count` field omitted from payload (not available at transfer time).
 Unpack worker can count files after extraction if needed.
 
 ### Phase 3 Notes
-*(To be filled during implementation)*
+
+**Completed 2025-12-22**
+
+Files modified:
+- `src/unpack_worker.py` - Complete rewrite of processing logic for S3 flow
+
+Key changes:
+1. **Imports updated**: Removed `PATHS`, `shutil`, `bulk_insert_audio_files`; Added `s3_utils.download_archive`, `s3_utils.cleanup_scratch`, `LOCAL`
+2. **New `process_job()` function**: Replaces `process_archive()`, handles S3-based flow
+3. **Scratch directory**: All work done in `LOCAL["SCRATCH_ROOT"]/{batch_id}/`
+4. **DB insert removed**: GPU worker now handles DB insertion (Phase 4)
+
+Flow changes:
+```
+BEFORE: Pop path string → extract to UNPACKED_DIR → convert to AUDIO_DIR → DB insert → queue with audio_id
+AFTER:  Pop JSON → S3 download → extract to scratch → convert in scratch → batch tracking → queue with batch_id
+```
+
+New transcription job format (queue:transcribe):
+```json
+{
+    "batch_id": "20250622-143052-a1b2c3",
+    "opus_path": "/data/scratch/20250622-143052-a1b2c3/audio001.opus",
+    "original_filename": "audio001.mp3"
+}
+```
+
+Batch tracking keys set:
+```
+batch:{batch_id}:total     = N      # Number of opus files
+batch:{batch_id}:processed = 0      # Incremented by GPU worker
+batch:{batch_id}:s3_key    = "..."  # For reference/cleanup
+```
+
+Cleanup behavior:
+- Archive.tar deleted after extraction (saves space)
+- MP3 files deleted after conversion (saves space)
+- Opus files KEPT in scratch for GPU worker
+- On failure: entire scratch directory cleaned up
+
+Note: `audio_id` removed from transcription job - GPU worker will:
+1. Insert to DB (gets audio_id)
+2. Upload opus to S3
+3. Update DB with S3 path
 
 ### Phase 4 Notes
 *(To be filled during implementation)*

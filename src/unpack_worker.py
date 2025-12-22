@@ -1,21 +1,29 @@
 """
 Audio Processing Pipeline - Unpack Worker
 
-Extracts tar archives, converts MP3 to Opus, and queues files for transcription.
-Runs on GPU VMs alongside the GPU worker as a separate process.
+Downloads archives from S3, extracts tar archives, converts MP3 to Opus,
+and queues files for transcription. Runs on GPU VMs alongside the GPU worker.
+
+S3 Flow:
+1. Pop JSON job from queue:unpack
+2. Download archive from S3 to scratch directory
+3. Extract and convert MP3 → Opus in scratch
+4. Set batch tracking keys in Redis
+5. Queue transcription jobs with batch_id
+6. Delete archive (keep opus for GPU worker)
 """
 
 import json
-import shutil
 import subprocess
 import tarfile
+import time
 from concurrent.futures import ProcessPoolExecutor, as_completed
 from datetime import datetime
 from pathlib import Path
 from typing import Optional
 
-from .config import PATHS, REDIS, PROCESSING
-from .db import bulk_insert_audio_files
+from .config import LOCAL, REDIS, PROCESSING
+from .s3_utils import download_archive, cleanup_scratch
 from .utils import setup_logger, get_redis_client, detect_archive_type, get_audio_duration
 
 logger = setup_logger("unpack_worker")
@@ -119,70 +127,75 @@ def extract_archive(archive_path: Path, extract_dir: Path) -> bool:
         return False
 
 
-def process_archive(archive_path: str) -> dict:
+def process_job(job: dict, redis_client) -> dict:
     """
-    Process a single archive: extract, convert, insert to DB, queue for transcription.
+    Process a job from the unpack queue: download from S3, extract, convert, queue.
+
+    S3 Flow:
+    1. Download archive from S3 to scratch directory
+    2. Extract tar to scratch directory
+    3. Convert MP3 → Opus in scratch
+    4. Set batch tracking keys in Redis
+    5. Queue transcription jobs with batch_id
+    6. Delete archive (keep opus for GPU worker)
 
     Args:
-        archive_path: Path to the tar archive
+        job: Job dict with keys: batch_id, s3_key, original_filename, transferred_at
+        redis_client: Redis client instance
 
     Returns:
         Dict with processing statistics
     """
-    archive_path = Path(archive_path)
-    archive_name = archive_path.stem
-
-    # Strip common suffixes for cleaner directory name
-    for suffix in [".tar", ".gz", ".tar.gz", ".tgz"]:
-        if archive_name.endswith(suffix.replace(".", "")):
-            archive_name = archive_name[:-len(suffix.replace(".", ""))]
-            break
+    batch_id = job["batch_id"]
+    s3_key = job["s3_key"]
+    original_filename = job.get("original_filename", "unknown")
 
     stats = {
-        "archive": archive_path.name,
+        "batch_id": batch_id,
+        "original_filename": original_filename,
         "mp3_found": 0,
         "converted": 0,
         "failed": 0,
         "queued": 0,
     }
 
-    # 1. Create temp extraction directory
-    extract_dir = PATHS["UNPACKED_DIR"] / archive_name
-    extract_dir.mkdir(parents=True, exist_ok=True)
+    scratch_dir = None
 
     try:
-        # 2. Extract archive
-        logger.info(f"Extracting {archive_path.name} to {extract_dir}")
-        if not extract_archive(archive_path, extract_dir):
+        # 1. Download archive from S3 to scratch
+        logger.info(f"Batch {batch_id}: downloading from S3 ({s3_key})")
+        archive_path = download_archive(s3_key, batch_id)
+        scratch_dir = archive_path.parent  # /data/scratch/{batch_id}/
+
+        # 2. Extract archive to scratch directory
+        logger.info(f"Batch {batch_id}: extracting archive")
+        if not extract_archive(archive_path, scratch_dir):
             stats["failed"] = -1  # Indicate extraction failure
-            return stats
+            raise RuntimeError(f"Failed to extract archive for batch {batch_id}")
 
         # 3. Find all MP3 files
-        mp3_files = list(extract_dir.rglob("*.mp3"))
-        mp3_files.extend(extract_dir.rglob("*.MP3"))  # Case insensitive
+        mp3_files = list(scratch_dir.rglob("*.mp3"))
+        mp3_files.extend(scratch_dir.rglob("*.MP3"))  # Case insensitive
         stats["mp3_found"] = len(mp3_files)
 
         if not mp3_files:
-            logger.warning(f"No MP3 files found in {archive_path.name}")
+            logger.warning(f"Batch {batch_id}: no MP3 files found in archive")
+            # Clean up and return - not a fatal error
+            archive_path.unlink(missing_ok=True)
             return stats
 
-        logger.info(f"Found {len(mp3_files)} MP3 files in {archive_path.name}")
+        logger.info(f"Batch {batch_id}: found {len(mp3_files)} MP3 files")
 
-        # 4. Prepare output directory (organized by date)
-        today = datetime.now().strftime("%Y-%m-%d")
-        output_dir = PATHS["AUDIO_DIR"] / today
-        output_dir.mkdir(parents=True, exist_ok=True)
-
-        # 5. Build conversion tasks
+        # 4. Build conversion tasks (output to same scratch directory)
         conversion_tasks = []
         for mp3_path in mp3_files:
-            # Create unique opus filename: archive_originalname.opus
-            opus_name = f"{archive_name}_{mp3_path.stem}.opus"
-            opus_path = output_dir / opus_name
+            # Create opus filename in scratch: originalname.opus
+            opus_name = f"{mp3_path.stem}.opus"
+            opus_path = scratch_dir / opus_name
             conversion_tasks.append((mp3_path, opus_path))
 
-        # 6. Parallel conversion
-        records = []
+        # 5. Parallel conversion
+        opus_results = []
         with ProcessPoolExecutor(max_workers=PROCESSING["FFMPEG_WORKERS"]) as executor:
             futures = {
                 executor.submit(convert_mp3_to_opus, task): task
@@ -194,112 +207,128 @@ def process_archive(archive_path: str) -> dict:
                 try:
                     result = future.result()
                     if result and result.get("success"):
-                        # Get audio duration
-                        duration = get_audio_duration(opus_path)
-
-                        records.append({
-                            "original_filename": result["original_filename"],
+                        opus_results.append({
                             "opus_path": result["opus_path"],
-                            "archive_source": archive_path.name,
-                            "duration_seconds": duration,
+                            "original_filename": result["original_filename"],
                             "file_size_bytes": result["file_size_bytes"],
                         })
                         stats["converted"] += 1
                     else:
                         stats["failed"] += 1
-                        logger.warning(f"Failed to convert {mp3_path.name}")
+                        logger.warning(f"Batch {batch_id}: failed to convert {mp3_path.name}")
                 except Exception as e:
                     stats["failed"] += 1
-                    logger.error(f"Conversion error for {mp3_path.name}: {e}")
+                    logger.error(f"Batch {batch_id}: conversion error for {mp3_path.name}: {e}")
 
         logger.info(
-            f"Conversion complete: {stats['converted']} succeeded, "
-            f"{stats['failed']} failed out of {stats['mp3_found']}"
+            f"Batch {batch_id}: conversion complete - "
+            f"{stats['converted']} succeeded, {stats['failed']} failed"
         )
 
-        # 7. Bulk insert to database
-        if records:
+        if not opus_results:
+            logger.error(f"Batch {batch_id}: no files converted successfully")
+            raise RuntimeError(f"No files converted for batch {batch_id}")
+
+        # 6. Set batch tracking keys in Redis
+        redis_client.set(f"batch:{batch_id}:total", len(opus_results))
+        redis_client.set(f"batch:{batch_id}:processed", 0)
+        redis_client.set(f"batch:{batch_id}:s3_key", s3_key)
+        logger.info(f"Batch {batch_id}: set tracking keys (total={len(opus_results)})")
+
+        # 7. Queue transcription jobs with batch_id
+        for opus_info in opus_results:
+            transcribe_job = {
+                "batch_id": batch_id,
+                "opus_path": opus_info["opus_path"],
+                "original_filename": opus_info["original_filename"],
+            }
+            redis_client.lpush(REDIS["QUEUES"]["TRANSCRIBE"], json.dumps(transcribe_job))
+            stats["queued"] += 1
+
+        logger.info(f"Batch {batch_id}: queued {stats['queued']} files for transcription")
+
+        # 8. Delete archive file (keep opus files for GPU worker)
+        try:
+            archive_path.unlink()
+            logger.debug(f"Batch {batch_id}: deleted archive from scratch")
+        except Exception as e:
+            logger.warning(f"Batch {batch_id}: failed to delete archive: {e}")
+
+        # Delete extracted MP3 files (no longer needed)
+        for mp3_path in mp3_files:
             try:
-                audio_ids = bulk_insert_audio_files(records)
-                logger.info(f"Inserted {len(audio_ids)} records to database")
+                mp3_path.unlink(missing_ok=True)
+            except Exception:
+                pass  # Best effort cleanup
 
-                # 8. Queue for transcription
-                redis_client = get_redis_client()
-                for audio_id, record in zip(audio_ids, records):
-                    msg = json.dumps({
-                        "audio_id": audio_id,
-                        "opus_path": record["opus_path"],
-                        "original_filename": record["original_filename"],
-                    })
-                    redis_client.lpush(REDIS["QUEUES"]["TRANSCRIBE"], msg)
-                    stats["queued"] += 1
+        return stats
 
-                logger.info(f"Queued {stats['queued']} files for transcription")
+    except Exception as e:
+        logger.error(f"Batch {batch_id} failed: {e}")
 
-            except Exception as e:
-                logger.error(f"Database/queue error: {e}")
-                # Don't re-raise - we want to continue to cleanup
+        # Push to failed queue for investigation
+        failed_job = {
+            **job,
+            "error": str(e),
+            "failed_at": datetime.utcnow().isoformat() + "Z",
+        }
+        redis_client.lpush(REDIS["QUEUES"]["FAILED"], json.dumps(failed_job))
 
-        # 9. Move archive to processed directory
-        processed_path = PATHS["PROCESSED_DIR"] / archive_path.name
-        try:
-            shutil.move(str(archive_path), str(processed_path))
-            logger.debug(f"Moved archive to {processed_path}")
-        except Exception as e:
-            logger.warning(f"Failed to move archive to processed: {e}")
+        # Cleanup scratch directory on failure
+        if scratch_dir:
+            cleanup_scratch(batch_id)
 
-    finally:
-        # 10. Cleanup extraction directory
-        try:
-            if extract_dir.exists():
-                shutil.rmtree(extract_dir)
-                logger.debug(f"Cleaned up {extract_dir}")
-        except Exception as e:
-            logger.warning(f"Failed to cleanup {extract_dir}: {e}")
-
-    return stats
+        raise
 
 
 def main():
-    """Main loop - block on Redis queue for archives to process."""
-    logger.info("Unpack worker starting...")
+    """Main loop - block on Redis queue for jobs to process."""
+    logger.info("Unpack worker starting (S3 mode)...")
 
-    # Ensure paths exist
-    from config import ensure_paths_exist
-    ensure_paths_exist()
+    # Ensure scratch directory exists
+    LOCAL["SCRATCH_ROOT"].mkdir(parents=True, exist_ok=True)
 
     redis_client = get_redis_client()
-    logger.info("Connected to Redis, waiting for archives...")
+    logger.info("Connected to Redis, waiting for jobs...")
 
     total_processed = 0
     total_converted = 0
 
     while True:
         try:
-            # Block until an archive is available (timeout=0 means infinite wait)
+            # Block until a job is available (timeout=0 means infinite wait)
             result = redis_client.brpop(REDIS["QUEUES"]["UNPACK"], timeout=0)
 
             if result is None:
                 continue
 
-            _, archive_path = result
-            logger.info(f"Received archive: {archive_path}")
+            _, job_data = result
+
+            # Parse JSON job payload
+            try:
+                job = json.loads(job_data)
+            except json.JSONDecodeError as e:
+                logger.error(f"Invalid JSON in job: {e} - data: {job_data[:200]}")
+                redis_client.lpush(REDIS["QUEUES"]["FAILED"], job_data)
+                continue
+
+            batch_id = job.get("batch_id", "unknown")
+            logger.info(f"Received job: batch_id={batch_id}")
 
             try:
-                stats = process_archive(archive_path)
+                stats = process_job(job, redis_client)
                 total_processed += 1
                 total_converted += stats.get("converted", 0)
 
                 logger.info(
-                    f"Archive {stats['archive']}: {stats['converted']} converted, "
+                    f"Batch {stats['batch_id']}: {stats['converted']} converted, "
                     f"{stats['queued']} queued | "
-                    f"Total: {total_processed} archives, {total_converted} files"
+                    f"Total: {total_processed} batches, {total_converted} files"
                 )
 
             except Exception as e:
-                logger.error(f"Failed processing {archive_path}: {e}", exc_info=True)
-                # Push to failed queue for later inspection
-                redis_client.lpush(REDIS["QUEUES"]["FAILED"], archive_path)
+                logger.error(f"Failed processing batch {batch_id}: {e}", exc_info=True)
+                # Error handling already done in process_job
 
         except KeyboardInterrupt:
             logger.info("Shutdown requested, exiting...")
@@ -307,7 +336,6 @@ def main():
         except Exception as e:
             logger.error(f"Error in main loop: {e}", exc_info=True)
             # Brief pause before retrying
-            import time
             time.sleep(5)
 
 
