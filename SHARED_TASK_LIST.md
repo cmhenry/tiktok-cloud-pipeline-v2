@@ -1,664 +1,523 @@
-# Audio Processing Pipeline for Content Moderation
+# Storage Infrastructure: S3 + Local Volumes
 
 ## Project Overview
 
-Build a distributed audio processing pipeline for content moderation research. The system ingests tar archives of audio files from AWS, processes them through transcription (WhisperX) and classification (CoPE-A), and surfaces flagged content for research assistant review.
+Eliminate the shared cloud volume bottleneck by migrating to S3 object storage for audio archives and local Cinder volumes on GPU workers for models and scratch space.
 
 **Goals:**
-- Ingest up to 1TB of audio data daily from AWS EC2
-- Convert MP3 → Opus for efficient storage on 20TB shared volume
-- Transcribe audio and classify for harmful content
-- Surface ≥200 flagged posts daily by noon for RA review window (12pm-4pm)
-- Run 24/7 with graceful failure handling
+- Remove orchestrator VM as file-serving bottleneck
+- Enable horizontal scaling of GPU workers without shared storage contention
+- Preserve processed Opus files in S3 for historical access
+- Maintain batch-level tracking for reliable scratch cleanup
 
-**Infrastructure:**
-- Coordinator VM: 4 vCPU, 16GB RAM (Redis, Postgres, reporting app)
-- Worker VMs (×3): 8 vCPU, 32GB RAM, L4 GPU 24GB VRAM (unpack + transcribe + classify)
-- Transfer VM: 8 vCPU, 32GB RAM (runs modified transfer script)
-- 20TB shared cloud volume mounted at `/mnt/data`
+**Architecture Change:**
+```
+BEFORE: EC2 → Transfer → Shared Volume → Unpack → Shared Volume → GPU Worker
+AFTER:  EC2 → Transfer → S3 (archives) → GPU Worker (local scratch) → S3 (processed)
+```
 
-**Processing math:**
-- ~2M files ingested daily, 10% flag rate → 200K flagged
-- Need ~40K processed to get 200 reportable (10% flag × 5% reportable)
-- 60-second average audio → ~500-800 files/hour/GPU
-- 3 GPUs × 24 hours × 500 files = 36K files/day ✓
+**Storage Layout:**
+
+| Location | Purpose | Size |
+|----------|---------|------|
+| S3 `archives/` | Incoming tar archives | ~1TB/day, 7-day retention |
+| S3 `processed/` | Preserved Opus files | Multi-TB, long-term |
+| `/data/models/` | WhisperX, Gemma-2-9B | ~50GB per GPU VM |
+| `/data/scratch/` | Temporary processing | ~40GB per GPU VM |
+
+**S3 Key Structure:**
+```
+audio-pipeline/
+├── archives/{batch_id}.tar           # Incoming archives (transfer worker uploads)
+└── processed/{date}/{audio_id}.opus  # Preserved opus (GPU worker uploads after success)
+```
 
 ## Current Status
 
-- [x] Transfer script from collaborator (transfer_sounds.py)
-- [x] Architecture design complete
-- [x] Shared infrastructure (config, utils, db, schema)
-- [x] Database schema and migrations
-- [x] Transfer worker integration
-- [x] Unpack worker (tar extraction, MP3→Opus)
-- [x] GPU worker (WhisperX + CoPE-A)
-- [x] Deployment and systemd services
+- [ ] S3 utilities module
+- [ ] Configuration updates
+- [ ] Transfer worker S3 upload
+- [ ] Unpack worker S3 pull
+- [ ] GPU worker S3 upload + scratch cleanup
+- [ ] Ansible: GPU volume tasks
+- [ ] Ansible: Model sync tasks
+- [ ] Ansible: S3 credentials
+- [ ] Ansible: Playbook updates
 
 ---
 
-## Phase 1: Shared Infrastructure
+## Phase 1: S3 Utilities Module
 
-### 1.1 Configuration Module
-
-Central config consumed by all workers:
+### 1.1 S3 Client Module
 
 ```python
-# config.py
+# s3_utils.py
 import os
-from pathlib import Path
-
-# Paths - shared cloud volume
-VOLUME_ROOT = Path(os.getenv("VOLUME_ROOT", "/mnt/data"))
-PATHS = {
-    "INCOMING_DIR": VOLUME_ROOT / "incoming",      # Landing zone for tar archives
-    "UNPACKED_DIR": VOLUME_ROOT / "unpacked",      # Temp extraction directory  
-    "AUDIO_DIR": VOLUME_ROOT / "audio",            # Final opus files by date
-    "PROCESSED_DIR": VOLUME_ROOT / "processed",    # Completed archive logs
-}
-
-# Redis
-REDIS = {
-    "HOST": os.getenv("REDIS_HOST", "10.0.0.1"),
-    "PORT": int(os.getenv("REDIS_PORT", 6379)),
-    "QUEUES": {
-        "UNPACK": "list:unpack",
-        "TRANSCRIBE": "list:transcribe", 
-        "FAILED": "list:failed",
-    },
-}
-
-# Postgres
-POSTGRES = {
-    "HOST": os.getenv("POSTGRES_HOST", "10.0.0.1"),
-    "PORT": int(os.getenv("POSTGRES_PORT", 5432)),
-    "DATABASE": os.getenv("POSTGRES_DB", "audio_pipeline"),
-    "USER": os.getenv("POSTGRES_USER", "pipeline"),
-    "PASSWORD": os.getenv("POSTGRES_PASSWORD"),
-}
-
-# AWS transfer settings
-AWS = {
-    "HOST": "tt-zrh",                              # SSH config alias
-    "SOURCE_DIR": "/mnt/hub/export/sound",
-    "SSH_CONFIG_FILE": Path.home() / ".ssh/ssh_config",
-    "FILE_LATENCY_MIN": 10,                        # Only grab files >10 min old
-    "TRANSFER_BATCH": 50,                          # Max files per cycle
-    "POLL_INTERVAL": 60,                           # Seconds between polls
-    "SECURE_TRANSFER": True,                       # Verify file sizes
-    "DELETE_AFTER": False,                         # Flip True once validated
-}
-
-# Transfer lock settings
-TRANSFER_LOCKS = {
-    "DIR": Path.home() / "transfer_locks",
-    "TIMEOUT_MIN": 60,
-}
-
-# Processing settings
-PROCESSING = {
-    "BATCH_SIZE": 32,
-    "WHISPERX_MODEL": "large-v2",
-    "COPE_MODEL": "google/gemma-2-9b-it",
-    "COPE_ADAPTER": Path("/models/cope-a-lora"),
-    "FFMPEG_WORKERS": 4,                           # Parallel conversions
-    "OPUS_BITRATE": "48k",
-}
-```
-
-### 1.2 Utilities Module
-
-```python
-# utils.py
-import logging
-import redis
-import magic  # python-magic for content detection
-
-def setup_logger(name: str, log_dir: Path = None) -> logging.Logger:
-    """Consistent logging format across workers."""
-    # Format: timestamp | level | worker | message
-    pass
-
-def get_redis_client() -> redis.Redis:
-    """Redis connection with retry logic."""
-    pass
-
-def detect_archive_type(path: Path) -> str:
-    """Content-based detection using magic bytes.
-    Returns: 'tar', 'gzip', 'tar.gz', or 'unknown'
-    Important: our .tar.gz files are often actually uncompressed tar!
-    """
-    pass
-
-def safe_move(src: Path, dst: Path) -> bool:
-    """Atomic move with verification."""
-    pass
-```
-
-### 1.3 Database Module
-
-```python
-# db.py
-from contextlib import contextmanager
-import psycopg2
-from psycopg2 import pool
-
-_pool = None
-
-def get_db_pool():
-    """Initialize connection pool."""
-    pass
-
-@contextmanager
-def get_connection():
-    """Get connection from pool."""
-    pass
-
-def insert_audio_file(
-    original_filename: str,
-    opus_path: str, 
-    archive_source: str,
-    duration_seconds: float,
-    file_size_bytes: int,
-) -> int:
-    """Insert audio file record, return id."""
-    pass
-
-def bulk_insert_audio_files(records: list[dict]) -> list[int]:
-    """Batch insert, return ids."""
-    pass
-
-def insert_transcript(audio_id: int, text: str, language: str, confidence: float):
-    pass
-
-def insert_classification(audio_id: int, flagged: bool, score: float, category: str):
-    pass
-
-def update_audio_status(audio_id: int, status: str):
-    pass
-
-def get_pending_flagged(limit: int = 100) -> list[dict]:
-    """For RA queue - flagged items awaiting review."""
-    pass
-```
-
-### 1.4 Deliverables
-- [ ] `config.py` - Central configuration
-- [ ] `utils.py` - Logging, Redis client, archive detection, file ops
-- [ ] `db.py` - Connection pool and CRUD operations
-- [ ] `schema.sql` - Database schema with indexes
-- [ ] Ensure all paths created on startup
-
----
-
-## Phase 2: Database Schema
-
-### 2.1 Schema Design
-
-```sql
--- schema.sql
-
-CREATE TABLE audio_files (
-    id SERIAL PRIMARY KEY,
-    original_filename TEXT NOT NULL,
-    opus_path TEXT NOT NULL UNIQUE,
-    archive_source TEXT,
-    duration_seconds FLOAT,
-    file_size_bytes INTEGER,
-    created_at TIMESTAMP DEFAULT NOW(),
-    processed_at TIMESTAMP,
-    status TEXT DEFAULT 'pending'  -- pending, transcribed, flagged, reviewed, failed
-);
-
-CREATE TABLE transcripts (
-    id SERIAL PRIMARY KEY,
-    audio_file_id INTEGER REFERENCES audio_files(id) ON DELETE CASCADE,
-    transcript_text TEXT,
-    language TEXT,
-    confidence FLOAT,
-    created_at TIMESTAMP DEFAULT NOW()
-);
-
-CREATE TABLE classifications (
-    id SERIAL PRIMARY KEY,
-    audio_file_id INTEGER REFERENCES audio_files(id) ON DELETE CASCADE,
-    flagged BOOLEAN NOT NULL,
-    flag_score FLOAT,
-    flag_category TEXT,
-    created_at TIMESTAMP DEFAULT NOW()
-);
-
--- Indexes for common queries
-CREATE INDEX idx_audio_status_created ON audio_files(status, created_at DESC);
-CREATE INDEX idx_audio_archive ON audio_files(archive_source);
-CREATE INDEX idx_classifications_flagged ON classifications(flagged, created_at DESC);
-
--- RA queue view: flagged items from last 24 hours
-CREATE VIEW ra_queue AS
-SELECT 
-    af.id,
-    af.original_filename,
-    af.opus_path,
-    t.transcript_text,
-    c.flag_score,
-    c.flag_category,
-    af.created_at
-FROM audio_files af
-JOIN transcripts t ON t.audio_file_id = af.id
-JOIN classifications c ON c.audio_file_id = af.id
-WHERE c.flagged = true
-  AND af.status = 'flagged'
-  AND af.created_at > NOW() - INTERVAL '24 hours'
-ORDER BY c.flag_score DESC;
-```
-
-### 2.2 Deliverables
-- [ ] `schema.sql` - Tables, indexes, views
-- [ ] Migration script or instructions
-- [ ] Verify indexes support RA queue queries efficiently
-
----
-
-## Phase 3: Transfer Worker
-
-### 3.1 Modifications to Existing Script
-
-Minimal changes to `transfer_sounds.py`:
-
-```python
-# At top of file, replace hardcoded config:
-from config import AWS, TRANSFER_LOCKS, REDIS, PATHS
-
-DEST_FOLDER = str(PATHS["INCOMING_DIR"])
-SOURCE_FOLDER = AWS["SOURCE_DIR"]
-SSH_CONFIG_FILE = str(AWS["SSH_CONFIG_FILE"])
-TRANSFER_LOCK_FOLDER = str(TRANSFER_LOCKS["DIR"])
-
-# Update Redis connection:
-redis_client = redis.Redis(
-    host=REDIS["HOST"], 
-    port=REDIS["PORT"], 
-    decode_responses=True
-)
-
-# After successful transfer (around line 515), add queue push:
-if transfer_result and redis_client:
-    archive_path = f"{DEST_FOLDER}/{os.path.basename(source_file)}"
-    redis_client.lpush(REDIS["QUEUES"]["UNPACK"], archive_path)
-    log_message(f"Queued for unpacking: {archive_path}", logger)
-    files_queued += 1
-```
-
-### 3.2 Deliverables
-- [ ] Modified `transfer_worker.py` using shared config
-- [ ] Test Redis queue integration
-- [ ] Verify size verification still works
-- [ ] Add queued count to logging
-
----
-
-## Phase 4: CPU Worker (Unpack + Convert)
-
-### 4.1 Unpack Worker
-
-Runs on GPU VMs alongside GPU worker (separate process):
-
-```python
-# unpack_worker.py
-import tarfile
-from concurrent.futures import ProcessPoolExecutor
+import shutil
 from pathlib import Path
 from datetime import datetime
-import subprocess
-import json
+import boto3
+from botocore.config import Config
 
-from config import PATHS, REDIS, PROCESSING
-from utils import setup_logger, get_redis_client, detect_archive_type
-from db import bulk_insert_audio_files
+def get_s3_client():
+    """S3 client configured for OpenStack Swift/S3-compatible endpoint."""
+    return boto3.client(
+        's3',
+        endpoint_url=os.environ['S3_ENDPOINT'],
+        aws_access_key_id=os.environ['S3_ACCESS_KEY'],
+        aws_secret_access_key=os.environ['S3_SECRET_KEY'],
+        config=Config(signature_version='s3v4')
+    )
 
-logger = setup_logger("unpack_worker")
+# Archive operations (transfer worker)
+def upload_archive(local_path: Path, batch_id: str) -> str:
+    """Upload tar archive to S3. Returns S3 key."""
+    s3_key = f"archives/{batch_id}.tar"
+    # Upload with multipart for large files
+    pass
 
-def convert_mp3_to_opus(mp3_path: Path, opus_path: Path) -> bool:
-    """Convert single file with ffmpeg."""
-    cmd = [
-        "ffmpeg", "-y", "-i", str(mp3_path),
-        "-c:a", "libopus", "-b:a", PROCESSING["OPUS_BITRATE"],
-        str(opus_path)
-    ]
-    result = subprocess.run(cmd, capture_output=True)
-    return result.returncode == 0
+# Archive operations (unpack worker)  
+def download_archive(s3_key: str, batch_id: str) -> Path:
+    """Download archive from S3 to local scratch. Returns local path."""
+    # Download to /data/scratch/{batch_id}/archive.tar
+    pass
 
-def process_archive(archive_path: str):
-    """Extract archive, convert files, queue for transcription."""
-    archive_path = Path(archive_path)
-    archive_name = archive_path.stem
-    
-    # 1. Create temp extraction dir
-    extract_dir = PATHS["UNPACKED_DIR"] / archive_name
-    extract_dir.mkdir(parents=True, exist_ok=True)
-    
-    # 2. Detect type and extract (handle mislabeled archives)
-    archive_type = detect_archive_type(archive_path)
-    # ... extraction logic based on type
-    
-    # 3. Find all MP3s
-    mp3_files = list(extract_dir.rglob("*.mp3"))
-    
-    # 4. Parallel conversion
-    today = datetime.now().strftime("%Y-%m-%d")
-    output_dir = PATHS["AUDIO_DIR"] / today
-    output_dir.mkdir(parents=True, exist_ok=True)
-    
-    records = []
-    with ProcessPoolExecutor(max_workers=PROCESSING["FFMPEG_WORKERS"]) as executor:
-        # ... convert files, collect records
-        pass
-    
-    # 5. Bulk insert to DB
-    audio_ids = bulk_insert_audio_files(records)
-    
-    # 6. Queue for transcription
-    redis_client = get_redis_client()
-    for audio_id, record in zip(audio_ids, records):
-        msg = json.dumps({
-            "audio_id": audio_id,
-            "opus_path": record["opus_path"],
-            "original_filename": record["original_filename"],
-        })
-        redis_client.lpush(REDIS["QUEUES"]["TRANSCRIBE"], msg)
-    
-    # 7. Cleanup
-    shutil.rmtree(extract_dir)
-    # Move archive to processed or delete
+# Processed file operations (GPU worker)
+def upload_opus(local_path: Path, audio_id: int, date: str) -> str:
+    """Upload processed opus file to S3. Returns S3 key."""
+    s3_key = f"processed/{date}/{audio_id}.opus"
+    pass
 
-def main():
-    """Main loop - block on Redis queue."""
-    redis_client = get_redis_client()
-    logger.info("Unpack worker started, waiting for archives...")
-    
-    while True:
-        _, archive_path = redis_client.brpop(REDIS["QUEUES"]["UNPACK"])
-        try:
-            process_archive(archive_path)
-        except Exception as e:
-            logger.error(f"Failed processing {archive_path}: {e}")
-            redis_client.lpush(REDIS["QUEUES"]["FAILED"], archive_path)
+def delete_archive(s3_key: str):
+    """Delete archive from S3 after successful batch processing (optional)."""
+    pass
 
-if __name__ == "__main__":
-    main()
+# Scratch management
+def cleanup_scratch(batch_id: str):
+    """Remove batch scratch directory after processing complete."""
+    scratch_dir = Path(os.environ.get('SCRATCH_ROOT', '/data/scratch')) / batch_id
+    shutil.rmtree(scratch_dir, ignore_errors=True)
 ```
 
-### 4.2 Deliverables
-- [ ] `unpack_worker.py` - Main worker script
-- [ ] Content-based archive detection (tar vs gzip)
-- [ ] Parallel ffmpeg conversion with ProcessPoolExecutor
-- [ ] Bulk DB inserts for efficiency
-- [ ] JSON messages to transcribe queue
-- [ ] Error handling - don't stop on single file failures
-- [ ] Cleanup temp directories after processing
+### 1.2 Configuration Updates
 
----
-
-## Phase 5: GPU Worker (Transcribe + Classify)
-
-### 5.1 GPU Worker
-
-Runs on GPU VMs, handles both WhisperX and CoPE-A:
+Add to `config.py`:
 
 ```python
-# gpu_worker.py
-import torch
-import whisperx
-from transformers import AutoModelForCausalLM, AutoTokenizer, BitsAndBytesConfig
-from peft import PeftModel
-import json
+# S3 Configuration
+S3 = {
+    "ENDPOINT": os.getenv("S3_ENDPOINT"),
+    "ACCESS_KEY": os.getenv("S3_ACCESS_KEY"),
+    "SECRET_KEY": os.getenv("S3_SECRET_KEY"),
+    "BUCKET": os.getenv("S3_BUCKET", "audio-pipeline"),
+    "ARCHIVE_PREFIX": "archives/",
+    "PROCESSED_PREFIX": "processed/",
+}
 
-from config import REDIS, PROCESSING, POSTGRES
-from utils import setup_logger, get_redis_client
-from db import get_db_pool, insert_transcript, insert_classification, update_audio_status
-
-logger = setup_logger("gpu_worker")
-
-class GPUWorker:
-    def __init__(self):
-        self.device = "cuda"
-        self.whisper_model = None
-        self.cope_model = None
-        self.cope_tokenizer = None
-        
-    def initialize_models(self):
-        """Load models at startup."""
-        logger.info("Loading WhisperX...")
-        self.whisper_model = whisperx.load_model(
-            PROCESSING["WHISPERX_MODEL"],
-            self.device,
-            compute_type="float16"
-        )
-        
-        logger.info("Loading Gemma + CoPE-A LoRA...")
-        bnb_config = BitsAndBytesConfig(load_in_8bit=True)
-        base_model = AutoModelForCausalLM.from_pretrained(
-            PROCESSING["COPE_MODEL"],
-            quantization_config=bnb_config,
-            device_map="auto",
-        )
-        self.cope_model = PeftModel.from_pretrained(
-            base_model, 
-            PROCESSING["COPE_ADAPTER"]
-        )
-        self.cope_tokenizer = AutoTokenizer.from_pretrained(PROCESSING["COPE_MODEL"])
-        
-        # Log VRAM usage
-        allocated = torch.cuda.memory_allocated() / 1024**3
-        logger.info(f"Models loaded. VRAM used: {allocated:.1f}GB")
-    
-    def transcribe(self, audio_path: str) -> dict:
-        """Transcribe single audio file."""
-        audio = whisperx.load_audio(audio_path)
-        result = self.whisper_model.transcribe(audio, batch_size=16)
-        return {
-            "text": result["segments"][0]["text"] if result["segments"] else "",
-            "language": result.get("language", "unknown"),
-            "confidence": 0.0,  # Extract from segments if available
-        }
-    
-    def classify(self, transcript: str) -> dict:
-        """Classify transcript with CoPE-A."""
-        prompt = f"""Analyze this transcript for harmful content.
-
-Transcript: "{transcript}"
-
-Respond with JSON only: {{"flagged": true/false, "score": 0.0-1.0, "category": "category or null"}}"""
-        
-        inputs = self.cope_tokenizer(prompt, return_tensors="pt").to(self.device)
-        outputs = self.cope_model.generate(**inputs, max_new_tokens=100)
-        response = self.cope_tokenizer.decode(outputs[0], skip_special_tokens=True)
-        
-        # Parse JSON from response
-        # ... handle malformed responses
-        return {"flagged": False, "score": 0.0, "category": None}
-    
-    def process_batch(self, items: list[dict]):
-        """Process batch of audio files."""
-        for item in items:
-            try:
-                # Transcribe
-                transcript = self.transcribe(item["opus_path"])
-                insert_transcript(
-                    item["audio_id"],
-                    transcript["text"],
-                    transcript["language"],
-                    transcript["confidence"],
-                )
-                
-                # Classify
-                classification = self.classify(transcript["text"])
-                insert_classification(
-                    item["audio_id"],
-                    classification["flagged"],
-                    classification["score"],
-                    classification["category"],
-                )
-                
-                # Update status
-                status = "flagged" if classification["flagged"] else "transcribed"
-                update_audio_status(item["audio_id"], status)
-                
-            except Exception as e:
-                logger.error(f"Failed processing {item['audio_id']}: {e}")
-                update_audio_status(item["audio_id"], "failed")
-    
-    def run(self):
-        """Main loop - collect batches from queue."""
-        redis_client = get_redis_client()
-        logger.info("GPU worker started, waiting for audio files...")
-        
-        while True:
-            batch = []
-            
-            # Collect batch
-            while len(batch) < PROCESSING["BATCH_SIZE"]:
-                result = redis_client.brpop(
-                    REDIS["QUEUES"]["TRANSCRIBE"], 
-                    timeout=5
-                )
-                if result is None:
-                    break  # Timeout, process what we have
-                _, msg = result
-                batch.append(json.loads(msg))
-            
-            if batch:
-                logger.info(f"Processing batch of {len(batch)} files")
-                self.process_batch(batch)
-
-
-def main():
-    worker = GPUWorker()
-    worker.initialize_models()
-    worker.run()
-
-if __name__ == "__main__":
-    main()
+# Local storage (GPU workers)
+LOCAL = {
+    "SCRATCH_ROOT": Path(os.getenv("SCRATCH_ROOT", "/data/scratch")),
+    "MODELS_ROOT": Path(os.getenv("MODELS_ROOT", "/data/models")),
+}
 ```
 
-### 5.2 Deliverables
-- [ ] `gpu_worker.py` - Main GPU worker script
-- [ ] WhisperX initialization with large-v2 model
-- [ ] Gemma-2-9B with 8-bit quantization + LoRA adapter loading
-- [ ] Batch collection from Redis queue
-- [ ] Transcription with language detection
-- [ ] Classification with JSON parsing
-- [ ] DB writes for transcripts and classifications
-- [ ] VRAM monitoring and logging
-- [ ] Error handling per-file (don't crash on failures)
+### 1.3 Deliverables
+- [ ] `s3_utils.py` - S3 client with all operations
+- [ ] `config.py` updates - S3 and local storage config
+- [ ] Unit tests for S3 operations (mock or MinIO)
 
 ---
 
-## Phase 6: Deployment
+## Phase 2: Transfer Worker Updates
 
-### 6.1 Coordinator VM Setup
+### 2.1 S3 Upload Integration
 
-```bash
-# Redis
-sudo apt install redis-server
-sudo systemctl enable redis-server
+Modify `transfer_sounds.py` to upload archives to S3 instead of shared volume:
 
-# Configure Redis for network access
-# /etc/redis/redis.conf:
-#   bind 0.0.0.0
-#   maxmemory 4gb
-#   maxmemory-policy allkeys-lru
+```python
+# After successful SCP from EC2:
+from s3_utils import upload_archive
 
-# PostgreSQL  
-sudo apt install postgresql postgresql-contrib
-sudo -u postgres createdb audio_pipeline
-sudo -u postgres psql -d audio_pipeline -f schema.sql
+# Current: move to shared volume
+# shutil.move(local_tar, PATHS["INCOMING_DIR"] / tar_name)
 
-# Mount shared volume
-sudo mount /dev/sdb /mnt/data
-mkdir -p /mnt/data/{incoming,unpacked,audio,processed}
+# New: upload to S3
+s3_key = upload_archive(local_tar, batch_id)
+
+# Enqueue job with S3 key
+job = {
+    "batch_id": batch_id,
+    "s3_key": s3_key,
+    "file_count": file_count,
+    "transferred_at": datetime.utcnow().isoformat(),
+}
+redis_client.rpush(REDIS["QUEUES"]["UNPACK"], json.dumps(job))
+
+# Delete local temp file
+local_tar.unlink()
 ```
 
-### 6.2 Worker VM Setup
+### 2.2 Job Payload Format
 
-```bash
-# Mount shared volume
-sudo mount /dev/sdb /mnt/data
-
-# Python environment
-python -m venv /opt/pipeline/venv
-source /opt/pipeline/venv/bin/activate
-pip install redis psycopg2-binary python-magic whisperx transformers peft bitsandbytes
-
-# Systemd services
-# /etc/systemd/system/unpack-worker.service
-# /etc/systemd/system/gpu-worker.service
+```json
+{
+    "batch_id": "20250622-143052-a1b2c3",
+    "s3_key": "archives/20250622-143052-a1b2c3.tar",
+    "file_count": 847,
+    "transferred_at": "2025-06-22T14:30:52Z"
+}
 ```
 
-### 6.3 Systemd Service Files
+### 2.3 Deliverables
+- [ ] Update `transfer_sounds.py` with S3 upload
+- [ ] New job payload format with s3_key
+- [ ] Remove shared volume path references
+- [ ] Verify temp file cleanup after upload
 
-```ini
-# /etc/systemd/system/gpu-worker.service
-[Unit]
-Description=GPU Worker (Transcription + Classification)
-After=network.target
+---
 
-[Service]
-Type=simple
-User=ubuntu
-WorkingDirectory=/opt/pipeline
-Environment=REDIS_HOST=10.0.0.1
-Environment=POSTGRES_HOST=10.0.0.1
-ExecStart=/opt/pipeline/venv/bin/python gpu_worker.py
-Restart=always
-RestartSec=10
+## Phase 3: Unpack Worker Updates
 
-[Install]
-WantedBy=multi-user.target
+### 3.1 S3 Pull Integration
+
+Modify `unpack_worker.py` to pull archives from S3:
+
+```python
+from s3_utils import download_archive
+
+def process_job(job: dict):
+    batch_id = job["batch_id"]
+    s3_key = job["s3_key"]
+    
+    # Download archive to scratch
+    archive_path = download_archive(s3_key, batch_id)
+    scratch_dir = archive_path.parent  # /data/scratch/{batch_id}/
+    
+    # Extract tar (existing logic, new location)
+    extract_tar(archive_path, scratch_dir)
+    
+    # Convert MP3 → Opus (existing logic, new location)
+    opus_files = convert_to_opus(scratch_dir)
+    
+    # Enqueue transcription jobs with batch tracking
+    for opus_path in opus_files:
+        job = {
+            "batch_id": batch_id,
+            "opus_path": str(opus_path),
+            "original_filename": opus_path.stem + ".mp3",
+        }
+        redis_client.rpush(REDIS["QUEUES"]["TRANSCRIBE"], json.dumps(job))
+    
+    # Track batch size for completion detection
+    redis_client.set(f"batch:{batch_id}:total", len(opus_files))
+    redis_client.set(f"batch:{batch_id}:processed", 0)
+    
+    # Delete archive file from scratch (keep opus files)
+    archive_path.unlink()
 ```
 
-### 6.4 Monitoring
+### 3.2 Batch Tracking Keys
+
+```
+batch:{batch_id}:total     = 847   # Set by unpack worker
+batch:{batch_id}:processed = 0     # Incremented by GPU worker
+batch:{batch_id}:s3_key    = "archives/..."  # For cleanup reference
+```
+
+### 3.3 Deliverables
+- [ ] Update `unpack_worker.py` with S3 download
+- [ ] Batch tracking keys in Redis
+- [ ] Remove shared volume path references
+- [ ] Extraction to scratch directory
+
+---
+
+## Phase 4: GPU Worker Updates
+
+### 4.1 Opus Upload + Batch Completion
+
+Modify `gpu_worker.py` to upload opus files and track batch completion:
+
+```python
+from s3_utils import upload_opus, cleanup_scratch
+
+def process_item(self, item: dict):
+    batch_id = item["batch_id"]
+    opus_path = Path(item["opus_path"])
+    
+    try:
+        # Existing: transcribe + classify
+        transcript = self.transcribe(str(opus_path))
+        classification = self.classify(transcript["text"])
+        
+        # Insert to DB (existing)
+        audio_id = insert_audio_file(...)
+        insert_transcript(audio_id, ...)
+        insert_classification(audio_id, ...)
+        
+        # NEW: Upload opus to S3 processed storage
+        date_str = datetime.utcnow().strftime("%Y-%m-%d")
+        s3_opus_key = upload_opus(opus_path, audio_id, date_str)
+        
+        # Update audio_files record with S3 path
+        update_audio_s3_path(audio_id, s3_opus_key)
+        
+        # Track batch progress
+        processed = redis_client.incr(f"batch:{batch_id}:processed")
+        total = int(redis_client.get(f"batch:{batch_id}:total") or 0)
+        
+        if processed >= total:
+            self.complete_batch(batch_id)
+            
+    except Exception as e:
+        # ... error handling
+        pass
+
+def complete_batch(self, batch_id: str):
+    """Called when all items in batch are processed."""
+    logger.info(f"Batch {batch_id} complete, cleaning up scratch")
+    
+    # Clean up scratch directory
+    cleanup_scratch(batch_id)
+    
+    # Clean up Redis keys
+    redis_client.delete(f"batch:{batch_id}:total")
+    redis_client.delete(f"batch:{batch_id}:processed")
+    redis_client.delete(f"batch:{batch_id}:s3_key")
+    
+    # Optional: delete source archive from S3
+    # s3_key = redis_client.get(f"batch:{batch_id}:s3_key")
+    # delete_archive(s3_key)
+```
+
+### 4.2 Schema Update
+
+Add S3 path column to audio_files:
 
 ```sql
--- Daily health check (run before noon)
-SELECT 
-    COUNT(*) FILTER (WHERE c.flagged = true) as flagged_count,
-    COUNT(*) as total_processed
-FROM audio_files af
-JOIN classifications c ON c.audio_file_id = af.id
-WHERE af.created_at > NOW() - INTERVAL '24 hours';
-
--- Queue depths
--- redis-cli LLEN list:unpack
--- redis-cli LLEN list:transcribe
+ALTER TABLE audio_files ADD COLUMN s3_opus_path TEXT;
+-- Replaces local opus_path for new records
 ```
 
-### 6.5 Deliverables
-- [ ] Coordinator setup script/instructions
-- [ ] Worker setup script/instructions
-- [ ] Systemd service files for all workers
-- [ ] Monitoring queries and scripts
-- [ ] Environment variable documentation
+### 4.3 Race Condition Handling
+
+Multiple GPU workers may process same batch. Use Redis INCR for atomic counting:
+
+```python
+# Atomic increment - returns new value
+processed = redis_client.incr(f"batch:{batch_id}:processed")
+
+# Only one worker will see processed == total
+if processed >= total:
+    self.complete_batch(batch_id)
+```
+
+### 4.4 Deliverables
+- [ ] Update `gpu_worker.py` with S3 opus upload
+- [ ] Batch completion detection with Redis atomic counters
+- [ ] Scratch cleanup on batch completion
+- [ ] Schema update for s3_opus_path
+- [ ] Handle edge cases (batch already cleaned, partial failures)
+
+---
+
+## Phase 5: Ansible Infrastructure
+
+### 5.1 GPU Worker Volume Tasks
+
+```yaml
+# roles/gpu_worker/tasks/volume.yml
+
+- name: Check if filesystem exists
+  command: blkid /dev/vdb
+  register: blkid_result
+  failed_when: false
+  changed_when: false
+
+- name: Create filesystem on data volume
+  filesystem:
+    fstype: ext4
+    dev: /dev/vdb
+  when: blkid_result.rc != 0
+
+- name: Mount data volume
+  mount:
+    path: /data
+    src: /dev/vdb
+    fstype: ext4
+    state: mounted
+
+- name: Create data directories
+  file:
+    path: "{{ item }}"
+    state: directory
+    owner: "{{ app_user }}"
+    group: "{{ app_user }}"
+    mode: '0755'
+  loop:
+    - /data/models
+    - /data/scratch
+```
+
+### 5.2 Model Sync Tasks
+
+```yaml
+# roles/gpu_worker/tasks/models.yml
+
+- name: Sync WhisperX model
+  synchronize:
+    src: "{{ model_source_host }}:{{ whisperx_model_path }}/"
+    dest: /data/models/whisperx/
+    mode: pull
+  delegate_to: "{{ inventory_hostname }}"
+  tags: [models]
+
+- name: Sync Gemma + CoPE-A adapter
+  synchronize:
+    src: "{{ model_source_host }}:{{ gemma_model_path }}/"
+    dest: /data/models/gemma/
+    mode: pull
+  delegate_to: "{{ inventory_hostname }}"
+  tags: [models]
+```
+
+### 5.3 S3 Credentials
+
+```yaml
+# group_vars/vault.yml (encrypted)
+vault_s3_access_key: "ACCESS_KEY_HERE"
+vault_s3_secret_key: "SECRET_KEY_HERE"
+
+# group_vars/all.yml
+s3_endpoint: "https://swift.example.edu:8080"
+s3_bucket: "audio-pipeline"
+
+# Worker service environment
+s3_access_key: "{{ vault_s3_access_key }}"
+s3_secret_key: "{{ vault_s3_secret_key }}"
+```
+
+### 5.4 Service Template Updates
+
+```ini
+# roles/gpu_worker/templates/gpu-worker.service.j2
+[Service]
+# ... existing ...
+Environment=S3_ENDPOINT={{ s3_endpoint }}
+Environment=S3_ACCESS_KEY={{ s3_access_key }}
+Environment=S3_SECRET_KEY={{ s3_secret_key }}
+Environment=S3_BUCKET={{ s3_bucket }}
+Environment=SCRATCH_ROOT=/data/scratch
+Environment=MODELS_ROOT=/data/models
+```
+
+### 5.5 Playbook Updates
+
+```yaml
+# playbooks/setup-new-worker.yml
+- name: Setup new GPU worker
+  hosts: gpu_workers
+  roles:
+    - common
+    - role: gpu_worker
+      tags: [gpu]
+  tasks:
+    - include_tasks: roles/gpu_worker/tasks/volume.yml
+      tags: [volume]
+    - include_tasks: roles/gpu_worker/tasks/models.yml
+      tags: [models]
+```
+
+```yaml
+# playbooks/sync-models.yml
+- name: Sync models to GPU workers
+  hosts: gpu_workers
+  tasks:
+    - include_tasks: roles/gpu_worker/tasks/models.yml
+    - name: Restart workers
+      systemd:
+        name: "{{ item }}"
+        state: restarted
+      loop:
+        - gpu-worker
+        - unpack-worker
+```
+
+### 5.6 Deliverables
+- [ ] `roles/gpu_worker/tasks/volume.yml`
+- [ ] `roles/gpu_worker/tasks/models.yml`
+- [ ] `group_vars/vault.yml` - S3 credentials
+- [ ] `group_vars/all.yml` - S3 endpoint/bucket
+- [ ] Update service templates with S3 env vars
+- [ ] `playbooks/setup-new-worker.yml` updates
+- [ ] `playbooks/sync-models.yml` - standalone model sync
+
+---
+
+## Phase 6: Health Checks + Monitoring
+
+### 6.1 S3 Connectivity Checks
+
+```bash
+# Check S3 from transfer worker
+python3 -c "from s3_utils import get_s3_client; print(get_s3_client().list_buckets())"
+
+# Check S3 from GPU worker  
+aws s3 ls s3://${S3_BUCKET}/archives/ --endpoint-url ${S3_ENDPOINT} | head -5
+```
+
+### 6.2 Scratch Space Monitoring
+
+```bash
+# Check scratch usage per worker
+ansible gpu_workers -a "du -sh /data/scratch/* 2>/dev/null | tail -10"
+
+# Find old scratch directories (may indicate stuck batches)
+ansible gpu_workers -a "find /data/scratch -maxdepth 1 -type d -mmin +120"
+```
+
+### 6.3 Batch Tracking Monitoring
+
+```bash
+# Check active batches
+redis-cli KEYS "batch:*:total"
+
+# Check specific batch progress
+redis-cli MGET batch:20250622-143052:total batch:20250622-143052:processed
+```
+
+### 6.4 Deliverables
+- [ ] Update `deploy/check-health.sh` with S3 checks
+- [ ] Add scratch monitoring queries
+- [ ] Add batch tracking monitoring
+- [ ] Alert on stuck batches (>2 hours incomplete)
 
 ---
 
 ## Notes for Implementation
 
-**Start with Phase 1** (shared infrastructure). This is foundation for everything else. Key files:
-- `config.py` 
-- `utils.py`
-- `db.py`
-- `schema.sql`
+**Implementation order:**
+1. Phase 1 (s3_utils, config) - Foundation, can test with MinIO locally
+2. Phase 5 (Ansible infra) - Prepare infrastructure before code deploy
+3. Phase 2 (transfer worker) - First code change, starts populating S3
+4. Phase 3 (unpack worker) - Second code change
+5. Phase 4 (GPU worker) - Final code change, enables full flow
+6. Phase 6 (health checks) - Operational readiness
 
-**Then Phase 2** (schema) - run migration on coordinator.
+**Testing strategy:**
+- Use MinIO locally to test S3 operations
+- Test batch completion logic with small test batches (3-5 files)
+- Verify scratch cleanup triggers correctly
+- Test concurrent GPU workers processing same batch
 
-**Then Phase 3** (transfer worker) - minimal modifications to existing script.
+**Key decisions made:**
+- Opus files preserved in S3 `processed/{date}/{audio_id}.opus`
+- Batch-level scratch cleanup (not age-based) for reliability
+- Redis atomic counters for batch completion tracking
+- Source archives retained in S3 (optional deletion after batch complete)
 
-**Then Phase 4** (unpack worker) - can test independently with sample tar files.
-
-**Finally Phase 5** (GPU worker) - requires GPU VM, test with sample audio files first.
-
-**Key gotchas:**
-- Tar archives may be mislabeled (`.tar.gz` but actually uncompressed) - use content detection
-- Both WhisperX and Gemma-2-9B need to fit in 24GB VRAM - use 8-bit quantization
-- CoPE-A JSON responses may be malformed - handle parsing errors gracefully
-- Run unpack worker and GPU worker as separate processes on same VM
+**Gotchas:**
+- S3v4 signature required for OpenStack Swift
+- Multipart upload for large tar files (>100MB)
+- Redis INCR is atomic - safe for concurrent workers
+- Scratch cleanup should be idempotent (directory may not exist)
