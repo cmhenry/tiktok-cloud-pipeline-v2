@@ -36,7 +36,7 @@ audio-pipeline/
 
 - [x] S3 utilities module
 - [x] Configuration updates
-- [ ] Transfer worker S3 upload
+- [x] Transfer worker S3 upload
 - [ ] Unpack worker S3 pull
 - [ ] GPU worker S3 upload + scratch cleanup
 - [ ] Ansible: GPU volume tasks
@@ -170,10 +170,10 @@ local_tar.unlink()
 ```
 
 ### 2.3 Deliverables
-- [ ] Update `transfer_sounds.py` with S3 upload
-- [ ] New job payload format with s3_key
-- [ ] Remove shared volume path references
-- [ ] Verify temp file cleanup after upload
+- [x] Update `transfer_sounds.py` with S3 upload
+- [x] New job payload format with s3_key
+- [x] Remove shared volume path references
+- [x] Verify temp file cleanup after upload
 
 ---
 

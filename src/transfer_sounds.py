@@ -13,10 +13,15 @@ import logging.handlers
 import requests, json
 import subprocess
 import re
+import tempfile
+import uuid
+from datetime import datetime
+from pathlib import Path
 from filelock import FileLock
 import redis
 
-from .config import AWS, TRANSFER_LOCKS, REDIS, PATHS, LOGGING
+from .config import AWS, TRANSFER_LOCKS, REDIS, LOGGING
+from .s3_utils import upload_archive
 
 ### Utils ###
 
@@ -428,13 +433,31 @@ QUEUE_UNPACK = REDIS["QUEUES"]["UNPACK"]
 
 # Paths (from config.py)
 LOG_FOLDER = str(LOGGING["DIR"])
-DEST_FOLDER = str(PATHS["INCOMING_DIR"])
+# Local temp directory for staging files before S3 upload
+TEMP_STAGING_DIR = os.path.join(tempfile.gettempdir(), "transfer_staging")
 SSH_CONFIG_FILE = str(AWS["SSH_CONFIG_FILE"])
 TRANSFER_LOCK_FOLDER = str(TRANSFER_LOCKS["DIR"])
 
 # Ensure directories exist
-for tmp_folder in [LOG_FOLDER, DEST_FOLDER, TRANSFER_LOCK_FOLDER]:
+for tmp_folder in [LOG_FOLDER, TEMP_STAGING_DIR, TRANSFER_LOCK_FOLDER]:
     os.makedirs(tmp_folder, exist_ok=True)
+
+
+def generate_batch_id(filename: str) -> str:
+    """
+    Generate a unique batch ID from the source filename.
+
+    Format: YYYYMMDD-HHMMSS-{short_uuid}
+
+    Args:
+        filename: Original source filename (used for uniqueness seed)
+
+    Returns:
+        Batch ID string like "20250622-143052-a1b2c3"
+    """
+    timestamp = datetime.utcnow().strftime("%Y%m%d-%H%M%S")
+    short_uuid = uuid.uuid4().hex[:6]
+    return f"{timestamp}-{short_uuid}"
 
 # Write this to SSH_CONFIG_FILE after fixing the paths and adding private key to AWS
 # Make sure to give proper rights: chmod 600 $SSH_CONFIG_FILE
@@ -499,31 +522,60 @@ while not (start_hour != time.gmtime().tm_hour and time.gmtime().tm_min >= MINUT
 			if start_hour != time.gmtime().tm_hour and time.gmtime().tm_min >= MINUTE_TO_RESTART_SCRIPT:
 				break
 			
-			if file_exists(source_file, AWS_CONTENT_VM_HOST): 
-				# 2. Transfer file directly from AWS to Greene
+			if file_exists(source_file, AWS_CONTENT_VM_HOST):
+				# 2. Transfer file directly from AWS to local staging
 				transfer_result = transfer_sound_zrh(
-					source_path = source_file, 
-					dest_path = DEST_FOLDER, 
-					source_host = AWS_CONTENT_VM_HOST, 
-					logger=logger, 
+					source_path = source_file,
+					dest_path = TEMP_STAGING_DIR,
+					source_host = AWS_CONTENT_VM_HOST,
+					logger=logger,
 					secure = True,
-                    # TODO: once this is ready set this to true to remove the file
+					# TODO: once this is ready set this to true to remove the file from EC2
 					remove = False
 				)
-			else: 
+			else:
 				transfer_result = False
-			
+
 			if not transfer_result:
 				# Transfer failed; skip verification & removal
 				files_skipped += 1
 				continue
-			else:
-				files_copied += 1
-				# Queue for unpacking pipeline
+
+			# Transfer to local staging succeeded - now upload to S3
+			local_archive_path = Path(TEMP_STAGING_DIR) / os.path.basename(source_file)
+			filename = os.path.basename(source_file)
+			batch_id = generate_batch_id(filename)
+
+			try:
+				# 3. Upload to S3
+				log_message(f"\t\tUploading to S3: {filename} as batch {batch_id}", logger)
+				s3_key = upload_archive(local_archive_path, batch_id)
+
+				# 4. Queue for unpacking pipeline with new JSON format
 				if redis_client:
-					archive_path = os.path.join(DEST_FOLDER, os.path.basename(source_file))
-					redis_client.lpush(QUEUE_UNPACK, archive_path)
-					log_message(f"\t\tQueued for unpacking: {os.path.basename(source_file)}", logger)
+					job = {
+						"batch_id": batch_id,
+						"s3_key": s3_key,
+						"original_filename": filename,
+						"transferred_at": datetime.utcnow().isoformat() + "Z"
+					}
+					redis_client.lpush(QUEUE_UNPACK, json.dumps(job))
+					log_message(f"\t\tQueued for unpacking: {batch_id} (s3://{s3_key})", logger)
+
+				# 5. Clean up local staging file after successful S3 upload
+				try:
+					local_archive_path.unlink()
+					log_message(f"\t\tCleaned up local staging file: {filename}", logger, level="debug")
+				except Exception as cleanup_err:
+					log_message(f"\t\tWarning: Failed to cleanup staging file {filename}: {cleanup_err}", logger, level="warning")
+
+				files_copied += 1
+
+			except Exception as s3_err:
+				# S3 upload failed - do NOT enqueue, do NOT delete local file (enables retry)
+				log_message(f"\t\tS3 upload failed for {filename}: {s3_err}", logger, level="error")
+				files_skipped += 1
+				continue
 
 	if files_copied + files_skipped:
 		log_message(f"\t\tComplete for Sound\t{files_copied} + {files_skipped}\t in {time.time() - start_time:.2f} secs\n\n", logger)

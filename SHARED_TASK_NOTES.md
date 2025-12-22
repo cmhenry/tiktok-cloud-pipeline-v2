@@ -7,7 +7,7 @@
 | Phase | Status | Notes |
 |-------|--------|-------|
 | Phase 1 (S3 Utils + Config) | COMPLETE | s3_utils.py, config.py updated, boto3 added |
-| Phase 2 (Transfer Worker) | NOT STARTED | S3 upload integration |
+| Phase 2 (Transfer Worker) | COMPLETE | S3 upload, JSON job payload, temp staging |
 | Phase 3 (Unpack Worker) | NOT STARTED | S3 pull + batch tracking |
 | Phase 4 (GPU Worker) | NOT STARTED | S3 upload + cleanup |
 | Phase 5 (Ansible Infra) | NOT STARTED | Volumes, models, credentials |
@@ -93,7 +93,41 @@ LOCAL = {
 Testing: Can test locally with MinIO using env vars from IMPLEMENTATION_PROMPTS.md
 
 ### Phase 2 Notes
-*(To be filled during implementation)*
+
+**Completed 2025-12-22**
+
+Files modified:
+- `src/transfer_sounds.py` - S3 upload integration
+
+Key changes:
+1. **Imports added**: `s3_utils.upload_archive`, `datetime`, `uuid`, `tempfile`, `Path`
+2. **Removed**: `PATHS` import (no longer using shared volume)
+3. **New staging dir**: Uses `tempfile.gettempdir()/transfer_staging` instead of shared volume
+4. **Batch ID format**: `YYYYMMDD-HHMMSS-{6-char-uuid}` (e.g., `20250622-143052-a1b2c3`)
+
+Flow changes:
+```
+BEFORE: SCP → shared volume → push path string to Redis
+AFTER:  SCP → temp staging → S3 upload → push JSON to Redis → cleanup temp
+```
+
+New job payload format:
+```json
+{
+    "batch_id": "20250622-143052-a1b2c3",
+    "s3_key": "archives/20250622-143052-a1b2c3.tar",
+    "original_filename": "sound_export_2025.tar",
+    "transferred_at": "2025-06-22T14:30:52Z"
+}
+```
+
+Error handling:
+- If S3 upload fails, job is NOT enqueued
+- Local staging file is NOT deleted on S3 failure (enables retry)
+- Cleanup failure is logged as warning but doesn't block
+
+Note: `file_count` field omitted from payload (not available at transfer time).
+Unpack worker can count files after extraction if needed.
 
 ### Phase 3 Notes
 *(To be filled during implementation)*
