@@ -59,8 +59,8 @@ TRANSFER_LOCKS = {
 PROCESSING = {
     "BATCH_SIZE": 32,
     "WHISPERX_MODEL": "large-v2",
-    "COPE_MODEL": "google/gemma-2-9b-it",
-    "COPE_ADAPTER": Path("/models/cope-a-lora"),
+    "COPE_MODEL": "/mnt/models/gemma-2-9b",
+    "COPE_ADAPTER": Path("/mnt/models/cope-a-adapter"),
     "COPE_POLICY": Path(__file__).parent / "tiktok_policy.txt",
     "FFMPEG_WORKERS": 4,                           # Parallel conversions
     "OPUS_BITRATE": "48k",
