@@ -11,7 +11,7 @@ import psycopg2
 from psycopg2 import pool
 from psycopg2.extras import execute_values, RealDictCursor
 
-from config import get_postgres_dsn
+from .config import get_postgres_dsn
 
 _pool: Optional[pool.ThreadedConnectionPool] = None
 

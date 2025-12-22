@@ -16,7 +16,7 @@ import re
 from filelock import FileLock
 import redis
 
-from config import AWS, TRANSFER_LOCKS, REDIS, PATHS, LOGGING
+from .config import AWS, TRANSFER_LOCKS, REDIS, PATHS, LOGGING
 
 ### Utils ###
 

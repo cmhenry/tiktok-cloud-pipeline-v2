@@ -13,7 +13,7 @@ from typing import Optional
 import magic
 import redis
 
-from config import REDIS, LOGGING
+from .config import REDIS, LOGGING
 
 
 def setup_logger(name: str, log_dir: Optional[Path] = None) -> logging.Logger:

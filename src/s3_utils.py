@@ -13,8 +13,8 @@ import boto3
 from botocore.config import Config as BotoConfig
 from botocore.exceptions import ClientError
 
-from config import S3, LOCAL
-from utils import setup_logger
+from .config import S3, LOCAL
+from .utils import setup_logger
 
 logger = setup_logger("s3_utils")
 

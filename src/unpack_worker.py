@@ -14,9 +14,9 @@ from datetime import datetime
 from pathlib import Path
 from typing import Optional
 
-from config import PATHS, REDIS, PROCESSING
-from db import bulk_insert_audio_files
-from utils import setup_logger, get_redis_client, detect_archive_type, get_audio_duration
+from .config import PATHS, REDIS, PROCESSING
+from .db import bulk_insert_audio_files
+from .utils import setup_logger, get_redis_client, detect_archive_type, get_audio_duration
 
 logger = setup_logger("unpack_worker")
 

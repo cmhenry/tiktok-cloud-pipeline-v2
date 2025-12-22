@@ -16,9 +16,9 @@ from concurrent.futures import ProcessPoolExecutor, as_completed
 from pathlib import Path
 
 # Import functions from worker modules
-from unpack_worker import extract_archive, convert_mp3_to_opus
-from gpu_worker import GPUWorker
-from utils import setup_logger, get_audio_duration
+from .unpack_worker import extract_archive, convert_mp3_to_opus
+from .gpu_worker import GPUWorker
+from .utils import setup_logger, get_audio_duration
 
 logger = setup_logger("test_pipeline", log_dir=Path.cwd())
 
