@@ -55,6 +55,22 @@ TRANSFER_LOCKS = {
     "TIMEOUT_MIN": 60,
 }
 
+# S3 Configuration (OpenStack Swift / S3-compatible storage)
+S3 = {
+    "ENDPOINT": os.getenv("S3_ENDPOINT"),
+    "ACCESS_KEY": os.getenv("S3_ACCESS_KEY"),
+    "SECRET_KEY": os.getenv("S3_SECRET_KEY"),
+    "BUCKET": os.getenv("S3_BUCKET", "audio-pipeline"),
+    "ARCHIVE_PREFIX": "archives/",
+    "PROCESSED_PREFIX": "processed/",
+}
+
+# Local Storage - GPU workers (Cinder volumes)
+LOCAL = {
+    "SCRATCH_ROOT": Path(os.getenv("SCRATCH_ROOT", "/data/scratch")),
+    "MODELS_ROOT": Path(os.getenv("MODELS_ROOT", "/data/models")),
+}
+
 # Processing settings
 PROCESSING = {
     "BATCH_SIZE": 32,

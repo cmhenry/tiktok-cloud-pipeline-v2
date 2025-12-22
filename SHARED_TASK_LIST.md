@@ -34,8 +34,8 @@ audio-pipeline/
 
 ## Current Status
 
-- [ ] S3 utilities module
-- [ ] Configuration updates
+- [x] S3 utilities module
+- [x] Configuration updates
 - [ ] Transfer worker S3 upload
 - [ ] Unpack worker S3 pull
 - [ ] GPU worker S3 upload + scratch cleanup
@@ -122,8 +122,9 @@ LOCAL = {
 ```
 
 ### 1.3 Deliverables
-- [ ] `s3_utils.py` - S3 client with all operations
-- [ ] `config.py` updates - S3 and local storage config
+- [x] `s3_utils.py` - S3 client with all operations
+- [x] `config.py` updates - S3 and local storage config
+- [x] `requirements.txt` - Added boto3 dependency
 - [ ] Unit tests for S3 operations (mock or MinIO)
 
 ---

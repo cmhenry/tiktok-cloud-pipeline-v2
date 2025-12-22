@@ -6,7 +6,7 @@
 
 | Phase | Status | Notes |
 |-------|--------|-------|
-| Phase 1 (S3 Utils + Config) | NOT STARTED | Foundation module |
+| Phase 1 (S3 Utils + Config) | COMPLETE | s3_utils.py, config.py updated, boto3 added |
 | Phase 2 (Transfer Worker) | NOT STARTED | S3 upload integration |
 | Phase 3 (Unpack Worker) | NOT STARTED | S3 pull + batch tracking |
 | Phase 4 (GPU Worker) | NOT STARTED | S3 upload + cleanup |
@@ -17,7 +17,7 @@
 
 ```
 Existing (from previous sprint):
-  config.py           - Central configuration (needs S3 additions)
+  config.py           - Central configuration (S3 + LOCAL sections added)
   utils.py            - Logging, Redis client, archive detection
   db.py               - PostgreSQL connection pool and CRUD
   schema.sql          - Database tables, indexes, views
@@ -26,8 +26,8 @@ Existing (from previous sprint):
   gpu_worker.py       - WhisperX + CoPE-A (needs S3 upload + cleanup)
 
 New files this sprint:
-  s3_utils.py         - S3 client operations
-  
+  s3_utils.py         - S3 client operations [DONE]
+
 Ansible additions:
   roles/gpu_worker/tasks/volume.yml  - Cinder volume setup
   roles/gpu_worker/tasks/models.yml  - Model sync tasks
@@ -56,7 +56,41 @@ Ansible additions:
 ## Implementation Notes
 
 ### Phase 1 Notes
-*(To be filled during implementation)*
+
+**Completed 2025-12-22**
+
+Files created/modified:
+- `src/s3_utils.py` - New S3 client module with all operations
+- `src/config.py` - Added S3 and LOCAL configuration sections
+- `requirements.txt` - Added boto3>=1.34.0
+
+Implementation details:
+- S3 client is cached globally for reuse (`_s3_client` singleton)
+- `upload_archive()` uses multipart upload for files >100MB with progress logging
+- `download_archive()` creates scratch directory automatically
+- `cleanup_scratch()` is idempotent (no error if directory missing)
+- Added `check_s3_connection()` helper for health checks
+- Added `get_archive_size()` helper for file verification
+- All functions use shared logger from utils.py for consistency
+
+Configuration added:
+```python
+S3 = {
+    "ENDPOINT": os.getenv("S3_ENDPOINT"),
+    "ACCESS_KEY": os.getenv("S3_ACCESS_KEY"),
+    "SECRET_KEY": os.getenv("S3_SECRET_KEY"),
+    "BUCKET": os.getenv("S3_BUCKET", "audio-pipeline"),
+    "ARCHIVE_PREFIX": "archives/",
+    "PROCESSED_PREFIX": "processed/",
+}
+
+LOCAL = {
+    "SCRATCH_ROOT": Path(os.getenv("SCRATCH_ROOT", "/data/scratch")),
+    "MODELS_ROOT": Path(os.getenv("MODELS_ROOT", "/data/models")),
+}
+```
+
+Testing: Can test locally with MinIO using env vars from IMPLEMENTATION_PROMPTS.md
 
 ### Phase 2 Notes
 *(To be filled during implementation)*
