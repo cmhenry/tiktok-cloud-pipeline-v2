@@ -74,7 +74,8 @@ def extract_archive(archive_path: Path, extract_dir: Path) -> bool:
     """
     Extract an archive using content-based type detection.
 
-    Handles mislabeled .tar.gz files that are actually plain tar.
+    Handles mislabeled .tar.gz files that are actually plain tar,
+    as well as .tar.xz (LZMA) compressed archives.
 
     Args:
         archive_path: Path to the archive file
@@ -90,15 +91,23 @@ def extract_archive(archive_path: Path, extract_dir: Path) -> bool:
         if archive_type == "tar.gz":
             with tarfile.open(archive_path, "r:gz") as tar:
                 tar.extractall(path=extract_dir, filter="data")
-        elif archive_type in ("tar", "gzip"):
+        elif archive_type == "tar.xz":
+            with tarfile.open(archive_path, "r:xz") as tar:
+                tar.extractall(path=extract_dir, filter="data")
+        elif archive_type in ("tar", "gzip", "xz"):
             # Try plain tar first (common case for mislabeled files)
             try:
                 with tarfile.open(archive_path, "r:") as tar:
                     tar.extractall(path=extract_dir, filter="data")
             except tarfile.ReadError:
                 # Fall back to gzip if plain tar fails
-                with tarfile.open(archive_path, "r:gz") as tar:
-                    tar.extractall(path=extract_dir, filter="data")
+                try:
+                    with tarfile.open(archive_path, "r:gz") as tar:
+                        tar.extractall(path=extract_dir, filter="data")
+                except tarfile.ReadError:
+                    # Fall back to xz/lzma if gzip also fails
+                    with tarfile.open(archive_path, "r:xz") as tar:
+                        tar.extractall(path=extract_dir, filter="data")
         else:
             logger.error(f"Unknown archive type for {archive_path.name}")
             return False

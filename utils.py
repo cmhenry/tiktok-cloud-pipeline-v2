@@ -107,7 +107,7 @@ def detect_archive_type(path: Path) -> str:
         path: Path to the archive file
 
     Returns:
-        'tar', 'gzip', 'tar.gz', or 'unknown'
+        'tar', 'gzip', 'tar.gz', 'tar.xz', or 'unknown'
     """
     mime = magic.Magic(mime=True)
     file_type = mime.from_file(str(path))
@@ -124,6 +124,17 @@ def detect_archive_type(path: Path) -> str:
         except Exception:
             pass
         return "gzip"
+    elif file_type in ("application/x-xz", "application/x-lzma"):
+        # Check if it's an xz-compressed tar
+        import lzma
+        try:
+            with lzma.open(path, 'rb') as f:
+                header = f.read(512)
+                if len(header) >= 257 and header[257:262] == b'ustar':
+                    return "tar.xz"
+        except Exception:
+            pass
+        return "xz"
     elif file_type == "application/x-tar":
         return "tar"
     elif "tar" in file_type.lower():
