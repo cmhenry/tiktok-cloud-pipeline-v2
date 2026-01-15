@@ -35,6 +35,7 @@ from .db import (
     insert_classification,
     update_audio_status,
     update_audio_s3_path,
+    update_audio_metadata,
 )
 
 logger = setup_logger("gpu_worker")
@@ -273,6 +274,11 @@ class GPUWorker:
                 duration_seconds=None,  # Could extract from WhisperX if needed
                 file_size_bytes=file_size,
             )
+
+            # 3a. Store parquet metadata if present in job payload
+            parquet_metadata = item.get("parquet_metadata", {})
+            if parquet_metadata:
+                update_audio_metadata(audio_id, parquet_metadata)
 
             # 4. Insert transcript
             insert_transcript(

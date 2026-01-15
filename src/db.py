@@ -9,7 +9,7 @@ from typing import Optional
 
 import psycopg2
 from psycopg2 import pool
-from psycopg2.extras import execute_values, RealDictCursor
+from psycopg2.extras import execute_values, RealDictCursor, Json
 
 from .config import get_postgres_dsn
 
@@ -240,6 +240,38 @@ def update_audio_s3_path(audio_id: int, s3_opus_path: str):
                 """,
                 (s3_opus_path, audio_id)
             )
+
+
+def update_audio_metadata(audio_id: int, metadata: dict) -> bool:
+    """
+    Store parquet metadata for an audio file.
+
+    Extracts key fields (lang, country) to dedicated columns for efficient
+    filtering and stores the full metadata as JSONB for flexible querying.
+
+    Args:
+        audio_id: Audio file record ID
+        metadata: Full parquet row dict with ~168 columns
+
+    Returns:
+        True if update succeeded, False otherwise
+    """
+    lang = metadata.get('lang')
+    country = metadata.get('country')
+
+    with get_connection() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                UPDATE audio_files
+                SET parquet_lang = %s,
+                    parquet_country = %s,
+                    parquet_metadata = %s
+                WHERE id = %s
+                """,
+                (lang, country, Json(metadata), audio_id)
+            )
+            return cur.rowcount > 0
 
 
 def get_pending_flagged(limit: int = 100) -> list[dict]:

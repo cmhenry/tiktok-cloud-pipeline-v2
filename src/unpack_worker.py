@@ -22,11 +22,66 @@ from datetime import datetime
 from pathlib import Path
 from typing import Optional
 
+import pyarrow.parquet as pq
+
 from .config import LOCAL, REDIS, PROCESSING
 from .s3_utils import download_archive, cleanup_scratch
 from .utils import setup_logger, get_redis_client, detect_archive_type, get_audio_duration
 
 logger = setup_logger("unpack_worker")
+
+
+def load_parquet_metadata(scratch_dir: Path) -> dict:
+    """
+    Load all parquet files from archive and build meta_id -> row lookup.
+
+    Parquet files contain TikTok metadata linked to MP3s via the meta_id column.
+    The meta_id matches the MP3 filename stem (e.g., "abc123.mp3" -> meta_id="abc123").
+
+    Args:
+        scratch_dir: Directory containing extracted archive contents
+
+    Returns:
+        Dict mapping meta_id (str) to full row dict containing all ~168 columns
+    """
+    metadata = {}
+    parquet_files = list(scratch_dir.rglob("*.parquet"))
+
+    if not parquet_files:
+        logger.debug(f"No parquet files found in {scratch_dir}")
+        return metadata
+
+    for pq_file in parquet_files:
+        try:
+            table = pq.read_table(pq_file)
+            # Process in batches for memory efficiency
+            for batch in table.to_batches():
+                batch_dict = batch.to_pydict()
+                meta_ids = batch_dict.get('meta_id', [])
+                num_rows = len(meta_ids)
+
+                for i in range(num_rows):
+                    # Build row dict from all columns
+                    row = {}
+                    for col in batch_dict:
+                        value = batch_dict[col][i]
+                        # Convert numpy/pyarrow types to Python native types for JSON serialization
+                        if hasattr(value, 'item'):  # numpy scalar
+                            value = value.item()
+                        elif hasattr(value, 'as_py'):  # pyarrow scalar
+                            value = value.as_py()
+                        row[col] = value
+
+                    meta_id = row.get('meta_id')
+                    if meta_id is not None:
+                        metadata[str(meta_id)] = row
+
+            logger.debug(f"Loaded {len(metadata)} records from {pq_file.name}")
+
+        except Exception as e:
+            logger.warning(f"Failed to parse parquet {pq_file}: {e}")
+
+    return metadata
 
 
 def convert_mp3_to_opus(args: tuple[Path, Path]) -> Optional[dict]:
@@ -173,7 +228,13 @@ def process_job(job: dict, redis_client) -> dict:
             stats["failed"] = -1  # Indicate extraction failure
             raise RuntimeError(f"Failed to extract archive for batch {batch_id}")
 
-        # 3. Find all MP3 files
+        # 3. Load parquet metadata (if present in archive)
+        parquet_metadata = load_parquet_metadata(scratch_dir)
+        if parquet_metadata:
+            logger.info(f"Batch {batch_id}: loaded {len(parquet_metadata)} parquet metadata records")
+        stats["parquet_records"] = len(parquet_metadata)
+
+        # 5. Find all MP3 files
         mp3_files = list(scratch_dir.rglob("*.mp3"))
         mp3_files.extend(scratch_dir.rglob("*.MP3"))  # Case insensitive
         stats["mp3_found"] = len(mp3_files)
@@ -186,7 +247,7 @@ def process_job(job: dict, redis_client) -> dict:
 
         logger.info(f"Batch {batch_id}: found {len(mp3_files)} MP3 files")
 
-        # 4. Build conversion tasks (output to same scratch directory)
+        # 6. Build conversion tasks (output to same scratch directory)
         conversion_tasks = []
         for mp3_path in mp3_files:
             # Create opus filename in scratch: originalname.opus
@@ -194,7 +255,7 @@ def process_job(job: dict, redis_client) -> dict:
             opus_path = scratch_dir / opus_name
             conversion_tasks.append((mp3_path, opus_path))
 
-        # 5. Parallel conversion
+        # 7. Parallel conversion
         opus_results = []
         with ProcessPoolExecutor(max_workers=PROCESSING["FFMPEG_WORKERS"]) as executor:
             futures = {
@@ -229,25 +290,37 @@ def process_job(job: dict, redis_client) -> dict:
             logger.error(f"Batch {batch_id}: no files converted successfully")
             raise RuntimeError(f"No files converted for batch {batch_id}")
 
-        # 6. Set batch tracking keys in Redis
+        # 8. Set batch tracking keys in Redis
         redis_client.set(f"batch:{batch_id}:total", len(opus_results))
         redis_client.set(f"batch:{batch_id}:processed", 0)
         redis_client.set(f"batch:{batch_id}:s3_key", s3_key)
         logger.info(f"Batch {batch_id}: set tracking keys (total={len(opus_results)})")
 
-        # 7. Queue transcription jobs with batch_id
+        # 9. Queue transcription jobs with batch_id and parquet metadata
+        matched_metadata = 0
         for opus_info in opus_results:
+            # Match opus filename stem to parquet meta_id
+            opus_stem = Path(opus_info["opus_path"]).stem
+            metadata = parquet_metadata.get(opus_stem, {})
+            if metadata:
+                matched_metadata += 1
+
             transcribe_job = {
                 "batch_id": batch_id,
                 "opus_path": opus_info["opus_path"],
                 "original_filename": opus_info["original_filename"],
+                "parquet_metadata": metadata,  # Include full metadata row
             }
             redis_client.lpush(REDIS["QUEUES"]["TRANSCRIBE"], json.dumps(transcribe_job))
             stats["queued"] += 1
 
-        logger.info(f"Batch {batch_id}: queued {stats['queued']} files for transcription")
+        stats["metadata_matched"] = matched_metadata
+        logger.info(
+            f"Batch {batch_id}: queued {stats['queued']} files for transcription "
+            f"({matched_metadata} with parquet metadata)"
+        )
 
-        # 8. Delete archive file (keep opus files for GPU worker)
+        # 10. Delete archive file (keep opus files for GPU worker)
         try:
             archive_path.unlink()
             logger.debug(f"Batch {batch_id}: deleted archive from scratch")

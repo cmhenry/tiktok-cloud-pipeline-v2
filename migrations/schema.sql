@@ -29,6 +29,11 @@ CREATE TABLE IF NOT EXISTS audio_files (
 -- Migration: Add s3_opus_path column if upgrading from previous schema
 -- ALTER TABLE audio_files ADD COLUMN IF NOT EXISTS s3_opus_path TEXT;
 
+-- Parquet metadata columns (for TikTok metadata from archives)
+ALTER TABLE audio_files ADD COLUMN IF NOT EXISTS parquet_lang TEXT;
+ALTER TABLE audio_files ADD COLUMN IF NOT EXISTS parquet_country TEXT;
+ALTER TABLE audio_files ADD COLUMN IF NOT EXISTS parquet_metadata JSONB;
+
 -- Transcript storage
 CREATE TABLE IF NOT EXISTS transcripts (
     id SERIAL PRIMARY KEY,
@@ -64,6 +69,11 @@ CREATE INDEX IF NOT EXISTS idx_classifications_flagged ON classifications(flagge
 CREATE INDEX IF NOT EXISTS idx_transcripts_audio_id ON transcripts(audio_file_id);
 CREATE INDEX IF NOT EXISTS idx_classifications_audio_id ON classifications(audio_file_id);
 
+-- Parquet metadata indexes
+CREATE INDEX IF NOT EXISTS idx_audio_parquet_lang ON audio_files(parquet_lang);
+CREATE INDEX IF NOT EXISTS idx_audio_parquet_country ON audio_files(parquet_country);
+CREATE INDEX IF NOT EXISTS idx_audio_parquet_metadata ON audio_files USING GIN (parquet_metadata);
+
 -- RA queue view: flagged items from last 24 hours
 -- Used by the reporting app for research assistant review
 CREATE OR REPLACE VIEW ra_queue AS
@@ -72,6 +82,9 @@ SELECT
     af.original_filename,
     af.opus_path,
     af.s3_opus_path,
+    af.parquet_lang,
+    af.parquet_country,
+    af.parquet_metadata,
     t.transcript_text,
     c.flag_score,
     c.flag_category,
