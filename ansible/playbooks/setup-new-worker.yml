@@ -1,0 +1,98 @@
+---
+# Setup New GPU Worker
+# Full provisioning for a new GPU worker VM
+#
+# Prerequisites:
+#   1. VM provisioned with GPU
+#   2. Cinder volume attached as /dev/vdb
+#   3. SSH access configured
+#   4. Added to inventory/production.yml
+#
+# Usage:
+#   ansible-playbook playbooks/setup-new-worker.yml --limit gpu-04
+#   ansible-playbook playbooks/setup-new-worker.yml --limit gpu-04,gpu-05
+
+- name: Setup new GPU worker
+  hosts: gpu_workers
+  become: yes
+
+  pre_tasks:
+    - name: Verify this is a new worker setup
+      debug:
+        msg: "Setting up new GPU worker: {{ inventory_hostname }}"
+      tags: [always]
+
+    - name: Check for attached volume
+      stat:
+        path: "{{ data_volume_device }}"
+      register: volume_check
+      tags: [volume]
+
+    - name: Fail if volume not attached
+      fail:
+        msg: |
+          Data volume {{ data_volume_device }} not found!
+          Please attach a Cinder volume before running this playbook.
+      when: not volume_check.stat.exists
+      tags: [volume]
+
+  roles:
+    - common
+    - gpu_worker
+
+  post_tasks:
+    - name: Verify services are running
+      systemd:
+        name: "{{ item }}"
+      loop:
+        - gpu-worker
+        - unpack-worker
+      register: services
+      tags: [verify]
+
+    - name: Show service status
+      debug:
+        msg: "{{ item.item }}: {{ item.status.ActiveState }}"
+      loop: "{{ services.results }}"
+      tags: [verify]
+
+    - name: Check model sync results
+      command: du -sh {{ models_root }}
+      register: model_size
+      changed_when: false
+      tags: [verify]
+
+    - name: Show model size
+      debug:
+        msg: "Models synced: {{ model_size.stdout }}"
+      tags: [verify]
+
+    - name: Check scratch directory
+      stat:
+        path: "{{ scratch_root }}"
+      register: scratch_check
+      tags: [verify]
+
+    - name: Show scratch status
+      debug:
+        msg: "Scratch directory ready: {{ scratch_check.stat.exists }}"
+      tags: [verify]
+
+    - name: Setup complete message
+      debug:
+        msg: |
+          GPU worker {{ inventory_hostname }} setup complete!
+
+          Services running:
+          - gpu-worker (WhisperX + CoPE-A)
+          - unpack-worker (S3 pull + extraction)
+
+          Storage:
+          - Models: {{ models_root }}
+          - Scratch: {{ scratch_root }}
+
+          Next steps:
+          1. Verify logs: journalctl -u gpu-worker -f
+          2. Check Redis connectivity
+          3. Process test batch
+      tags: [always]

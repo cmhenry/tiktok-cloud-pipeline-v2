@@ -1,0 +1,11 @@
+---
+# Transfer Worker Handlers
+
+- name: Reload systemd
+  systemd:
+    daemon_reload: yes
+
+- name: Restart transfer-worker
+  systemd:
+    name: transfer-worker
+    state: restarted

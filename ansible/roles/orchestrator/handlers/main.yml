@@ -1,0 +1,23 @@
+---
+# Orchestrator Handlers
+
+- name: Restart redis
+  systemd:
+    name: redis-server
+    state: restarted
+
+- name: Restart postgresql
+  systemd:
+    name: postgresql
+    state: restarted
+
+- name: Reload nginx
+  systemd:
+    name: nginx
+    state: reloaded
+
+- name: Restart ra-app
+  systemd:
+    name: ra-app
+    state: restarted
+  when: ra_app_enabled | default(false)

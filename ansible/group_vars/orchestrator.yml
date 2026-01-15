@@ -1,0 +1,40 @@
+---
+# Orchestrator VM Specific Variables
+
+# Services running on orchestrator
+orchestrator_services:
+  - redis-server
+  - postgresql
+
+# Redis configuration
+redis_bind_address: 0.0.0.0
+redis_maxmemory: 2gb
+redis_maxmemory_policy: noeviction
+
+# PostgreSQL configuration
+postgresql_version: 14
+postgresql_listen_addresses: "*"
+postgresql_max_connections: 100
+
+# Model storage (source for GPU worker sync)
+model_storage_mount: /mnt/models
+model_storage_paths:
+  whisperx: "{{ model_storage_mount }}/whisperx"
+  gemma: "{{ model_storage_mount }}/gemma-2-9b"
+  cope_adapter: "{{ model_storage_mount }}/cope-a-adapter"
+
+# RA Flask App (if deployed on orchestrator)
+ra_app_enabled: true
+ra_app_dir: /opt/ra-app
+ra_app_port: 8000
+ra_app_workers: 4
+
+# Transfer worker (may run on orchestrator)
+transfer_worker_enabled: false  # Set true if transfer runs on orchestrator
+
+# Orchestrator-specific packages
+orchestrator_packages:
+  - redis-server
+  - postgresql
+  - postgresql-contrib
+  - nginx  # Reverse proxy for RA app

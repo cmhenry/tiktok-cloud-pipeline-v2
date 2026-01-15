@@ -1,0 +1,40 @@
+---
+# GPU Worker Specific Variables
+
+# Cinder volume configuration
+data_volume_device: /dev/vdb
+data_volume_mount: /data
+data_volume_fstype: ext4
+
+# Local storage paths (on Cinder volume)
+scratch_root: /data/scratch
+models_root: /data/models
+
+# Model paths within models_root
+whisperx_model_path: "{{ models_root }}/whisperx"
+gemma_model_path: "{{ models_root }}/gemma-2-9b"
+cope_adapter_path: "{{ models_root }}/cope-a-adapter"
+
+# Processing settings
+whisperx_model: large-v2
+opus_bitrate: 48k
+ffmpeg_workers: 4
+gpu_batch_size: 32
+
+# CUDA settings
+cuda_visible_devices: "0"
+
+# Service names
+gpu_worker_service: gpu-worker
+unpack_worker_service: unpack-worker
+
+# GPU-specific packages
+gpu_packages:
+  - ffmpeg
+  - libmagic1
+  - nvidia-cuda-toolkit
+  # Note: PyTorch and ML packages installed via pip
+
+# Scratch cleanup cron (clean directories older than 3 hours)
+scratch_cleanup_enabled: true
+scratch_cleanup_age_minutes: 180

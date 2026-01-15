@@ -1,0 +1,58 @@
+[Unit]
+Description=Audio Pipeline Unpack Worker (S3 Pull + Extraction + Conversion)
+After=network.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User={{ app_user }}
+Group={{ app_group }}
+WorkingDirectory={{ pipeline_dir }}
+
+# Environment variables
+Environment=PYTHONUNBUFFERED=1
+
+# Redis connection
+Environment=REDIS_HOST={{ redis_host }}
+Environment=REDIS_PORT={{ redis_port }}
+
+# PostgreSQL connection (for potential future use)
+Environment=POSTGRES_HOST={{ postgres_host }}
+Environment=POSTGRES_PORT={{ postgres_port }}
+Environment=POSTGRES_DB={{ postgres_db }}
+Environment=POSTGRES_USER={{ postgres_user }}
+Environment=POSTGRES_PASSWORD={{ postgres_password }}
+
+# S3 configuration
+Environment=S3_ENDPOINT={{ s3_endpoint }}
+Environment=S3_ACCESS_KEY={{ s3_access_key }}
+Environment=S3_SECRET_KEY={{ s3_secret_key }}
+Environment=S3_BUCKET={{ s3_bucket }}
+
+# Local storage paths
+Environment=SCRATCH_ROOT={{ scratch_root }}
+
+# Processing settings
+Environment=OPUS_BITRATE={{ opus_bitrate }}
+Environment=FFMPEG_WORKERS={{ ffmpeg_workers }}
+
+# Logging
+Environment=LOG_DIR={{ log_dir }}
+
+# Execute
+ExecStart={{ pipeline_venv }}/bin/python -m src.unpack_worker
+
+# Restart policy
+Restart=always
+RestartSec=10
+
+# Resource limits
+LimitNOFILE=65535
+
+# Logging
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=unpack-worker
+
+[Install]
+WantedBy=multi-user.target

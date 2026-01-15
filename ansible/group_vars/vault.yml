@@ -1,0 +1,30 @@
+---
+# Vault Secrets Template
+#
+# IMPORTANT: This file should be encrypted with ansible-vault before use!
+#
+# To encrypt this file:
+#   ansible-vault encrypt group_vars/vault.yml
+#
+# To edit encrypted file:
+#   ansible-vault edit group_vars/vault.yml
+#
+# To run playbooks with vault:
+#   ansible-playbook playbooks/site.yml --ask-vault-pass
+#   OR
+#   ansible-playbook playbooks/site.yml --vault-password-file ~/.vault_pass
+
+# PostgreSQL password for pipeline user
+vault_postgres_password: "CHANGE_ME_postgres_password"
+
+# S3 credentials (OpenStack Swift EC2 credentials)
+vault_s3_access_key: "CHANGE_ME_s3_access_key"
+vault_s3_secret_key: "CHANGE_ME_s3_secret_key"
+
+# RA Flask App secret key (for sessions)
+vault_ra_app_secret_key: "CHANGE_ME_flask_secret_key"
+
+# Slack webhook URLs (optional)
+vault_slack_error_webhook: ""
+vault_slack_warning_webhook: ""
+vault_slack_transfer_webhook: ""

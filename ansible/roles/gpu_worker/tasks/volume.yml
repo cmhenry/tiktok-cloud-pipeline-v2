@@ -1,0 +1,74 @@
+---
+# GPU Worker Volume Setup
+# Configures Cinder volume for models and scratch space
+
+- name: Check if data volume device exists
+  stat:
+    path: "{{ data_volume_device }}"
+  register: volume_device
+  tags: [volume]
+
+- name: Fail if data volume not attached
+  fail:
+    msg: "Data volume {{ data_volume_device }} not found. Please attach a Cinder volume."
+  when: not volume_device.stat.exists
+  tags: [volume]
+
+- name: Check if filesystem exists on volume
+  command: blkid {{ data_volume_device }}
+  register: blkid_result
+  failed_when: false
+  changed_when: false
+  tags: [volume]
+
+- name: Create filesystem on data volume
+  filesystem:
+    fstype: "{{ data_volume_fstype }}"
+    dev: "{{ data_volume_device }}"
+  when: blkid_result.rc != 0
+  tags: [volume]
+
+- name: Create mount point directory
+  file:
+    path: "{{ data_volume_mount }}"
+    state: directory
+    mode: '0755'
+  tags: [volume]
+
+- name: Mount data volume
+  mount:
+    path: "{{ data_volume_mount }}"
+    src: "{{ data_volume_device }}"
+    fstype: "{{ data_volume_fstype }}"
+    opts: defaults,noatime
+    state: mounted
+  tags: [volume]
+
+- name: Create models directory
+  file:
+    path: "{{ models_root }}"
+    state: directory
+    owner: "{{ app_user }}"
+    group: "{{ app_group }}"
+    mode: '0755'
+  tags: [volume]
+
+- name: Create scratch directory
+  file:
+    path: "{{ scratch_root }}"
+    state: directory
+    owner: "{{ app_user }}"
+    group: "{{ app_group }}"
+    mode: '0755'
+  tags: [volume]
+
+- name: Check volume disk usage
+  command: df -h {{ data_volume_mount }}
+  register: disk_usage
+  changed_when: false
+  tags: [volume]
+
+- name: Display volume disk usage
+  debug:
+    msg: "{{ disk_usage.stdout_lines }}"
+  tags: [volume]

@@ -118,6 +118,71 @@ done
 echo ""
 
 # -----------------------------------------------------------------------------
+# S3 Connectivity Check
+# -----------------------------------------------------------------------------
+echo "--- S3 Connectivity ---"
+if [ -n "$S3_ENDPOINT" ] && [ -n "$S3_ACCESS_KEY" ] && [ -n "$S3_SECRET_KEY" ]; then
+    PIPELINE_DIR="${PIPELINE_DIR:-/opt/pipeline}"
+    PIPELINE_VENV="${PIPELINE_VENV:-$PIPELINE_DIR/venv}"
+    if [ -f "$PIPELINE_VENV/bin/python" ]; then
+        S3_STATUS=$("$PIPELINE_VENV/bin/python" -c "
+import sys
+sys.path.insert(0, '$PIPELINE_DIR')
+from src.s3_utils import check_s3_connection
+print('OK' if check_s3_connection() else 'FAIL')
+" 2>/dev/null || echo "ERROR")
+        echo "  S3 Connection: $S3_STATUS"
+    else
+        echo "  S3 Connection: SKIPPED (venv not found)"
+    fi
+else
+    echo "  S3 Connection: SKIPPED (credentials not set)"
+fi
+echo ""
+
+# -----------------------------------------------------------------------------
+# Batch Tracking (Active Batches in Redis)
+# -----------------------------------------------------------------------------
+echo "--- Active Batches ---"
+BATCH_KEYS=$(redis-cli -h "$REDIS_HOST" KEYS "batch:*:total" 2>/dev/null | wc -l | tr -d ' ')
+echo "  Active batches: $BATCH_KEYS"
+
+if [ "$BATCH_KEYS" != "0" ] && [ "$BATCH_KEYS" != "ERROR" ]; then
+    echo "  Batch details:"
+    redis-cli -h "$REDIS_HOST" KEYS "batch:*:total" 2>/dev/null | head -5 | while read -r key; do
+        if [ -n "$key" ]; then
+            BATCH_ID=$(echo "$key" | sed 's/batch:\(.*\):total/\1/')
+            TOTAL=$(redis-cli -h "$REDIS_HOST" GET "$key" 2>/dev/null || echo "?")
+            PROCESSED=$(redis-cli -h "$REDIS_HOST" GET "batch:$BATCH_ID:processed" 2>/dev/null || echo "?")
+            echo "    - $BATCH_ID: $PROCESSED / $TOTAL"
+        fi
+    done
+fi
+echo ""
+
+# -----------------------------------------------------------------------------
+# Scratch Space (GPU Workers)
+# -----------------------------------------------------------------------------
+SCRATCH_ROOT="${SCRATCH_ROOT:-/data/scratch}"
+if [ -d "$SCRATCH_ROOT" ]; then
+    echo "--- Scratch Space ---"
+    SCRATCH_USAGE=$(du -sh "$SCRATCH_ROOT" 2>/dev/null | cut -f1)
+    SCRATCH_DIRS=$(find "$SCRATCH_ROOT" -maxdepth 1 -type d 2>/dev/null | wc -l)
+    SCRATCH_DIRS=$((SCRATCH_DIRS - 1))  # Exclude parent
+    OLD_DIRS=$(find "$SCRATCH_ROOT" -maxdepth 1 -type d -mmin +120 2>/dev/null | wc -l)
+    OLD_DIRS=$((OLD_DIRS - 1))  # Exclude parent if old
+
+    echo "  Total usage: $SCRATCH_USAGE"
+    echo "  Active directories: $SCRATCH_DIRS"
+    echo "  Old directories (>2h): $OLD_DIRS"
+
+    if [ "$OLD_DIRS" -gt 0 ]; then
+        echo "  WARNING: Old scratch directories detected - may indicate stuck batches"
+    fi
+    echo ""
+fi
+
+# -----------------------------------------------------------------------------
 # Noon Target Check
 # -----------------------------------------------------------------------------
 HOUR=$(date +%H)

@@ -1,0 +1,26 @@
+---
+# GPU Worker Handlers
+
+- name: Reload systemd
+  systemd:
+    daemon_reload: yes
+
+- name: Restart gpu-worker
+  systemd:
+    name: gpu-worker
+    state: restarted
+  when: gpu_worker_service is defined
+
+- name: Restart unpack-worker
+  systemd:
+    name: unpack-worker
+    state: restarted
+  when: unpack_worker_service is defined
+
+- name: Restart all gpu workers
+  systemd:
+    name: "{{ item }}"
+    state: restarted
+  loop:
+    - gpu-worker
+    - unpack-worker

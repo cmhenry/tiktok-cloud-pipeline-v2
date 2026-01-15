@@ -1,0 +1,218 @@
+---
+# Health Check Playbook
+# Checks status of all pipeline components
+#
+# Usage:
+#   ansible-playbook playbooks/health-check.yml
+#   ansible-playbook playbooks/health-check.yml --tags redis
+#   ansible-playbook playbooks/health-check.yml --tags queues
+
+- name: Check orchestrator health
+  hosts: orchestrator
+  become: yes
+  gather_facts: yes
+  tags: [orchestrator]
+
+  tasks:
+    - name: Check Redis service
+      systemd:
+        name: redis-server
+      register: redis_service
+      tags: [redis]
+
+    - name: Check Redis connectivity
+      command: redis-cli ping
+      register: redis_ping
+      changed_when: false
+      tags: [redis]
+
+    - name: Get Redis queue lengths
+      command: redis-cli LLEN {{ item }}
+      loop:
+        - "list:unpack"
+        - "list:transcribe"
+        - "list:failed"
+      register: queue_lengths
+      changed_when: false
+      tags: [queues]
+
+    - name: Get active batch count
+      shell: redis-cli KEYS "batch:*:total" | wc -l
+      register: active_batches
+      changed_when: false
+      tags: [queues]
+
+    - name: Check PostgreSQL service
+      systemd:
+        name: postgresql
+      register: postgres_service
+      tags: [postgresql]
+
+    - name: Check PostgreSQL connectivity
+      become_user: postgres
+      postgresql_ping:
+        db: "{{ postgres_db }}"
+      register: postgres_ping
+      tags: [postgresql]
+
+    - name: Get database stats
+      become_user: postgres
+      postgresql_query:
+        db: "{{ postgres_db }}"
+        query: |
+          SELECT
+            (SELECT COUNT(*) FROM audio_files WHERE created_at > NOW() - INTERVAL '24 hours') as files_24h,
+            (SELECT COUNT(*) FROM audio_files WHERE status = 'flagged') as flagged,
+            (SELECT COUNT(*) FROM audio_files WHERE status = 'failed') as failed
+      register: db_stats
+      tags: [postgresql]
+
+    - name: Display orchestrator status
+      debug:
+        msg: |
+          === ORCHESTRATOR STATUS ===
+
+          Redis: {{ redis_service.status.ActiveState }}
+          Redis Ping: {{ redis_ping.stdout }}
+
+          Queue Depths:
+          {% for result in queue_lengths.results %}
+            - {{ result.item }}: {{ result.stdout }}
+          {% endfor %}
+
+          Active Batches: {{ active_batches.stdout | trim }}
+
+          PostgreSQL: {{ postgres_service.status.ActiveState }}
+
+          Database (24h):
+            - Files processed: {{ db_stats.query_result[0].files_24h }}
+            - Flagged: {{ db_stats.query_result[0].flagged }}
+            - Failed: {{ db_stats.query_result[0].failed }}
+      tags: [always]
+
+- name: Check GPU worker health
+  hosts: gpu_workers
+  become: yes
+  gather_facts: yes
+  tags: [gpu_workers]
+
+  tasks:
+    - name: Check GPU worker service
+      systemd:
+        name: gpu-worker
+      register: gpu_worker_service
+      tags: [services]
+
+    - name: Check unpack worker service
+      systemd:
+        name: unpack-worker
+      register: unpack_worker_service
+      tags: [services]
+
+    - name: Check NVIDIA GPU
+      command: nvidia-smi --query-gpu=name,memory.used,memory.total --format=csv,noheader
+      register: nvidia_status
+      changed_when: false
+      failed_when: false
+      tags: [gpu]
+
+    - name: Check scratch space usage
+      command: df -h {{ scratch_root }}
+      register: scratch_usage
+      changed_when: false
+      tags: [storage]
+
+    - name: Count scratch directories
+      shell: ls -d {{ scratch_root }}/*/ 2>/dev/null | wc -l
+      register: scratch_dirs
+      changed_when: false
+      failed_when: false
+      tags: [storage]
+
+    - name: Check for old scratch directories (>2 hours)
+      shell: find {{ scratch_root }} -maxdepth 1 -type d -mmin +120 2>/dev/null | wc -l
+      register: old_scratch
+      changed_when: false
+      failed_when: false
+      tags: [storage]
+
+    - name: Check model directory
+      command: du -sh {{ models_root }}
+      register: models_size
+      changed_when: false
+      tags: [storage]
+
+    - name: Display GPU worker status
+      debug:
+        msg: |
+          === GPU WORKER: {{ inventory_hostname }} ===
+
+          Services:
+            - gpu-worker: {{ gpu_worker_service.status.ActiveState }}
+            - unpack-worker: {{ unpack_worker_service.status.ActiveState }}
+
+          GPU: {{ nvidia_status.stdout | default('Not available') }}
+
+          Storage:
+            - Scratch: {{ scratch_usage.stdout_lines[1] | default('N/A') }}
+            - Active batches in scratch: {{ scratch_dirs.stdout | trim }}
+            - Old scratch dirs (>2h): {{ old_scratch.stdout | trim }}
+            - Models: {{ models_size.stdout }}
+      tags: [always]
+
+- name: Check transfer worker health
+  hosts: transfer
+  become: yes
+  gather_facts: yes
+  tags: [transfer]
+
+  tasks:
+    - name: Check transfer worker service
+      systemd:
+        name: transfer-worker
+      register: transfer_service
+      tags: [services]
+
+    - name: Check S3 connectivity
+      command: "{{ pipeline_venv }}/bin/python -c \"from src.s3_utils import check_s3_connection; print('OK' if check_s3_connection() else 'FAIL')\""
+      args:
+        chdir: "{{ pipeline_dir }}"
+      environment:
+        S3_ENDPOINT: "{{ s3_endpoint }}"
+        S3_ACCESS_KEY: "{{ s3_access_key }}"
+        S3_SECRET_KEY: "{{ s3_secret_key }}"
+        S3_BUCKET: "{{ s3_bucket }}"
+      register: s3_check
+      changed_when: false
+      failed_when: false
+      tags: [s3]
+
+    - name: Display transfer worker status
+      debug:
+        msg: |
+          === TRANSFER WORKER: {{ inventory_hostname }} ===
+
+          Service: {{ transfer_service.status.ActiveState }}
+          S3 Connectivity: {{ s3_check.stdout | default('Check failed') }}
+      tags: [always]
+
+- name: Health check summary
+  hosts: localhost
+  gather_facts: no
+  tags: [summary]
+
+  tasks:
+    - name: Display summary
+      debug:
+        msg: |
+          ==============================
+          HEALTH CHECK COMPLETE
+          ==============================
+
+          Run with specific tags for detailed checks:
+            --tags redis      : Redis status
+            --tags postgresql : PostgreSQL status
+            --tags queues     : Queue depths
+            --tags gpu        : GPU status
+            --tags s3         : S3 connectivity
+            --tags storage    : Disk usage
