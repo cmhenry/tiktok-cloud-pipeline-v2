@@ -167,7 +167,7 @@ def insert_transcript(
         with conn.cursor() as cur:
             cur.execute(
                 """
-                INSERT INTO transcripts
+                INSERT INTO pipeline_transcripts
                     (audio_file_id, transcript_text, language, confidence)
                 VALUES (%s, %s, %s, %s)
                 """,
@@ -194,7 +194,7 @@ def insert_classification(
         with conn.cursor() as cur:
             cur.execute(
                 """
-                INSERT INTO classifications
+                INSERT INTO pipeline_classifications
                     (audio_file_id, flagged, flag_score, flag_category)
                 VALUES (%s, %s, %s, %s)
                 """,
@@ -297,8 +297,8 @@ def get_pending_flagged(limit: int = 100) -> list[dict]:
                     c.flag_category,
                     af.created_at
                 FROM audio_files af
-                JOIN transcripts t ON t.audio_file_id = af.id
-                JOIN classifications c ON c.audio_file_id = af.id
+                JOIN pipeline_transcripts t ON t.audio_file_id = af.id
+                JOIN pipeline_classifications c ON c.audio_file_id = af.id
                 WHERE c.flagged = true
                   AND af.status = 'flagged'
                   AND af.created_at > NOW() - INTERVAL '24 hours'
@@ -336,7 +336,7 @@ def get_processing_stats() -> dict:
                 SELECT
                     COUNT(*) FILTER (WHERE c.flagged = true) as flagged_count,
                     COUNT(*) as total_classified
-                FROM classifications c
+                FROM pipeline_classifications c
                 JOIN audio_files af ON af.id = c.audio_file_id
                 WHERE af.created_at > NOW() - INTERVAL '24 hours'
                 """
