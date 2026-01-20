@@ -8,6 +8,12 @@ for deployment-specific values with sensible defaults for development.
 import os
 from pathlib import Path
 
+from dotenv import load_dotenv
+
+# Load .env file from project root (if present)
+# This allows local development without exporting vars to shell
+load_dotenv()
+
 # Paths - shared cloud volume
 VOLUME_ROOT = Path(os.getenv("VOLUME_ROOT", "/mnt/data"))
 PATHS = {
