@@ -254,19 +254,42 @@ def cleanup_scratch(batch_id: str):
 
 def check_s3_connection() -> bool:
     """
-    Verify S3 connectivity by listing buckets.
+    Verify S3 connectivity by checking bucket access.
 
     Returns:
         True if connection successful, False otherwise
     """
     try:
         client = get_s3_client()
-        client.head_bucket(Bucket=S3["BUCKET"])
-        logger.info(f"S3 connection verified: bucket '{S3['BUCKET']}' accessible")
+        bucket = S3["BUCKET"]
+        endpoint = S3["ENDPOINT"]
+
+        logger.debug(f"Testing S3: endpoint={endpoint}, bucket={bucket}")
+        client.head_bucket(Bucket=bucket)
+        logger.info(f"S3 connection verified: bucket '{bucket}' accessible")
         return True
     except ClientError as e:
         error_code = e.response.get("Error", {}).get("Code", "Unknown")
-        logger.error(f"S3 connection failed: {error_code} - {e}")
+        error_msg = e.response.get("Error", {}).get("Message", str(e))
+
+        if error_code in ("404", "NoSuchBucket"):
+            logger.error(
+                f"S3 bucket not found: '{S3['BUCKET']}' at {S3['ENDPOINT']}. "
+                f"Check S3_BUCKET env var matches your bucket name."
+            )
+        elif error_code in ("403", "AccessDenied"):
+            logger.error(
+                f"S3 access denied to bucket '{S3['BUCKET']}'. "
+                f"Check EC2 credentials have bucket access."
+            )
+        elif error_code == "InvalidAccessKeyId":
+            logger.error(
+                f"Invalid S3 access key. Regenerate EC2 credentials with: "
+                f"openstack ec2 credentials create"
+            )
+        else:
+            logger.error(f"S3 connection failed [{error_code}]: {error_msg}")
+
         return False
     except Exception as e:
         logger.error(f"S3 connection failed: {e}")
