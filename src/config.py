@@ -90,7 +90,7 @@ PROCESSING = {
 
 # Logging settings
 LOGGING = {
-    "DIR": Path(os.getenv("LOG_DIR", "/var/log/pipeline")),
+    "DIR": Path(os.getenv("LOG_DIR", "/home/ubuntu/log/pipeline")),
     "FORMAT": "%(asctime)s | %(levelname)s | %(name)s | %(message)s",
     "DATE_FORMAT": "%Y-%m-%d %H:%M:%S",
 }
