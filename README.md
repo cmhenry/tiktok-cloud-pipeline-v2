@@ -243,9 +243,9 @@ audio_files (
     parquet_lang, parquet_country, parquet_metadata  -- from parquet files
 )
 
-transcripts (id, audio_file_id, transcript_text, language, confidence)
+pipeline_transcripts (id, audio_file_id, transcript_text, language, confidence)
 
-classifications (id, audio_file_id, flagged, flag_score, flag_category)
+pipeline_classifications (id, audio_file_id, flagged, flag_score, flag_category)
 ```
 
 ## Configuration Reference

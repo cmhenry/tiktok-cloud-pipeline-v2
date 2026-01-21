@@ -53,7 +53,7 @@ SELECT
     'Flagged:',
     COUNT(*)
 FROM audio_files af
-JOIN classifications c ON c.audio_file_id = af.id
+JOIN pipeline_classifications c ON c.audio_file_id = af.id
 WHERE c.flagged = true
   AND af.created_at > NOW() - INTERVAL '24 hours';
 " 2>/dev/null
@@ -190,7 +190,7 @@ if [ "$HOUR" -ge 10 ] && [ "$HOUR" -lt 12 ]; then
     FLAGGED=$(psql -h "$POSTGRES_HOST" -U "$POSTGRES_USER" -d "$POSTGRES_DB" -t -c "
         SELECT COUNT(*)
         FROM audio_files af
-        JOIN classifications c ON c.audio_file_id = af.id
+        JOIN pipeline_classifications c ON c.audio_file_id = af.id
         WHERE c.flagged = true
           AND af.created_at > NOW() - INTERVAL '24 hours';
     " 2>/dev/null | tr -d ' ')
