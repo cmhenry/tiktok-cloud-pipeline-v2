@@ -51,7 +51,7 @@ echo "[3/6] Configuring PostgreSQL..."
 
 # Create database and user
 sudo -u postgres psql <<EOF
-CREATE USER pipeline WITH PASSWORD 'changeme_pipeline_password';
+CREATE USER transcript_user WITH PASSWORD 'transcript_pass';
 CREATE DATABASE audio_pipeline OWNER pipeline;
 GRANT ALL PRIVILEGES ON DATABASE audio_pipeline TO pipeline;
 EOF

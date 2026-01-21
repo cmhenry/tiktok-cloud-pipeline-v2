@@ -38,9 +38,9 @@ REDIS = {
 POSTGRES = {
     "HOST": os.getenv("POSTGRES_HOST", "10.0.0.1"),
     "PORT": int(os.getenv("POSTGRES_PORT", "5432")),
-    "DATABASE": os.getenv("POSTGRES_DB", "audio_pipeline"),
-    "USER": os.getenv("POSTGRES_USER", "pipeline"),
-    "PASSWORD": os.getenv("POSTGRES_PASSWORD"),
+    "DATABASE": os.getenv("POSTGRES_DB", "transcript_db"),
+    "USER": os.getenv("POSTGRES_USER", "transcript_user"),
+    "PASSWORD": os.getenv("POSTGRES_PASSWORD", "transcript_pass"),
 }
 
 # AWS transfer settings
