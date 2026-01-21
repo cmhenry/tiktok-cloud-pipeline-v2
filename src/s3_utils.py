@@ -55,7 +55,13 @@ def get_s3_client():
         endpoint_url=S3["ENDPOINT"],
         aws_access_key_id=S3["ACCESS_KEY"],
         aws_secret_access_key=S3["SECRET_KEY"],
-        config=BotoConfig(signature_version="s3v4"),
+        config=BotoConfig(
+            signature_version="s3v4",
+            s3={
+                "addressing_style": "path",
+                "payload_signing_enabled": False,  # Required for OpenStack Swift
+            },
+        ),
     )
 
     logger.debug(f"S3 client initialized for endpoint: {S3['ENDPOINT']}")
