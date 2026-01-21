@@ -103,8 +103,9 @@ def upload_archive(local_path: Path, batch_id: str) -> str:
         # Use multipart upload for large files
         _multipart_upload(client, local_path, s3_key, file_size)
     else:
-        # Simple upload for smaller files
-        client.upload_file(str(local_path), S3["BUCKET"], s3_key)
+        # Simple upload using put_object (better Swift/radosgw compatibility)
+        with open(local_path, "rb") as f:
+            client.put_object(Bucket=S3["BUCKET"], Key=s3_key, Body=f)
 
     logger.info(f"Upload complete: {s3_key}")
     return s3_key
@@ -209,7 +210,9 @@ def upload_opus(local_path: Path, audio_id: int, date_str: str) -> str:
 
     logger.debug(f"Uploading opus {audio_id} to s3://{S3['BUCKET']}/{s3_key}")
 
-    client.upload_file(str(local_path), S3["BUCKET"], s3_key)
+    # Use put_object for Swift/radosgw compatibility
+    with open(local_path, "rb") as f:
+        client.put_object(Bucket=S3["BUCKET"], Key=s3_key, Body=f)
 
     return s3_key
 
