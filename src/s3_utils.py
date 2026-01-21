@@ -24,11 +24,22 @@ MULTIPART_THRESHOLD = 100 * 1024 * 1024
 _s3_client = None
 
 
+def _force_unsigned_payload(request, **kwargs):
+    """
+    Force UNSIGNED-PAYLOAD header for OpenStack Swift/radosgw compatibility.
+
+    This event handler runs before each S3 request is signed, setting the
+    x-amz-content-sha256 header to UNSIGNED-PAYLOAD to avoid checksum
+    mismatch errors with radosgw.
+    """
+    request.headers['x-amz-content-sha256'] = 'UNSIGNED-PAYLOAD'
+
+
 def get_s3_client():
     """
     Get S3 client configured for OpenStack Swift/S3-compatible endpoint.
 
-    Uses S3v4 signature (required for Swift compatibility).
+    Uses S3v4 signature with UNSIGNED-PAYLOAD for radosgw compatibility.
     Client is cached for reuse across calls.
 
     Returns:
@@ -57,12 +68,13 @@ def get_s3_client():
         aws_secret_access_key=S3["SECRET_KEY"],
         config=BotoConfig(
             signature_version="s3v4",
-            s3={
-                "addressing_style": "path",
-                "payload_signing_enabled": False,  # Required for OpenStack Swift
-            },
+            s3={"addressing_style": "path"},
         ),
     )
+
+    # Register event handler to force UNSIGNED-PAYLOAD header before signing
+    # This is required for OpenStack Swift/radosgw compatibility
+    _s3_client.meta.events.register('before-sign.s3.*', _force_unsigned_payload)
 
     logger.debug(f"S3 client initialized for endpoint: {S3['ENDPOINT']}")
     return _s3_client
