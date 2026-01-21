@@ -7,8 +7,8 @@ set -e
 # Configuration
 REDIS_HOST="${REDIS_HOST:-127.0.0.1}"
 POSTGRES_HOST="${POSTGRES_HOST:-127.0.0.1}"
-POSTGRES_DB="${POSTGRES_DB:-audio_pipeline}"
-POSTGRES_USER="${POSTGRES_USER:-pipeline}"
+POSTGRES_DB="${POSTGRES_DB:-transcript_db}"
+POSTGRES_USER="${POSTGRES_USER:-transcript_user}"
 
 echo "=== Audio Pipeline Health Check ==="
 echo "Time: $(date)"
