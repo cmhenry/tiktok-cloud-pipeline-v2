@@ -15,11 +15,11 @@ pipeline_venv: /opt/pipeline/venv
 redis_host: "{{ hostvars[groups['orchestrator'][0]]['ansible_host'] }}"
 redis_port: 6379
 
-# PostgreSQL configuration
+# PostgreSQL configuration (matches RA App credentials)
 postgres_host: "{{ hostvars[groups['orchestrator'][0]]['ansible_host'] }}"
 postgres_port: 5432
-postgres_db: audio_pipeline
-postgres_user: pipeline
+postgres_db: transcript_db
+postgres_user: transcript_user
 postgres_password: "{{ vault_postgres_password }}"
 
 # S3 Configuration (OpenStack Swift compatible)

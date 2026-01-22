@@ -1,10 +1,10 @@
 -- Audio Processing Pipeline - Database Schema
 --
 -- Run this on the coordinator VM:
---   sudo -u postgres psql -d audio_pipeline -f schema.sql
+--   sudo -u postgres psql -d transcript_db -f schema.sql
 --
 -- Or with custom database:
---   psql -h 10.0.0.1 -U pipeline -d audio_pipeline -f schema.sql
+--   psql -h 10.0.0.1 -U transcript_user -d transcript_db -f schema.sql
 
 -- Drop existing tables if recreating (comment out in production)
 -- DROP TABLE IF EXISTS classifications CASCADE;
