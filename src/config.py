@@ -79,13 +79,13 @@ LOCAL = {
 
 # Processing settings
 PROCESSING = {
-    "BATCH_SIZE": 32,
-    "WHISPERX_MODEL": "large-v2",
-    "COPE_MODEL": "/mnt/models/gemma-2-9b",
-    "COPE_ADAPTER": Path("/mnt/models/cope-a-adapter"),
+    "BATCH_SIZE": int(os.getenv("GPU_BATCH_SIZE", "32")),
+    "WHISPERX_MODEL": os.getenv("WHISPERX_MODEL", "large-v2"),
+    "COPE_MODEL": os.getenv("COPE_MODEL", "/mnt/models/gemma-2-9b"),
+    "COPE_ADAPTER": Path(os.getenv("COPE_ADAPTER", "/mnt/models/cope-a-adapter")),
     "COPE_POLICY": Path(__file__).parent / "tiktok_policy.txt",
-    "FFMPEG_WORKERS": 4,                           # Parallel conversions
-    "OPUS_BITRATE": "48k",
+    "FFMPEG_WORKERS": int(os.getenv("FFMPEG_WORKERS", "4")),
+    "OPUS_BITRATE": os.getenv("OPUS_BITRATE", "16k"),
 }
 
 # Logging settings

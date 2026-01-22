@@ -44,13 +44,28 @@
     state: mounted
   tags: [volume]
 
-- name: Create models directory
+- name: Create models directory on data volume
   file:
-    path: "{{ models_root }}"
+    path: "{{ data_volume_mount }}/models"
     state: directory
     owner: "{{ app_user }}"
     group: "{{ app_group }}"
     mode: '0755'
+  tags: [volume]
+
+- name: Create /mnt directory
+  file:
+    path: /mnt
+    state: directory
+    mode: '0755'
+  tags: [volume]
+
+- name: Create symlink /mnt/models -> /data/models
+  file:
+    src: "{{ data_volume_mount }}/models"
+    dest: /mnt/models
+    state: link
+    force: yes
   tags: [volume]
 
 - name: Create scratch directory
