@@ -25,7 +25,7 @@ PATHS = {
 
 # Redis
 REDIS = {
-    "HOST": os.getenv("REDIS_HOST", "10.0.0.1"),
+    "HOST": os.getenv("REDIS_HOST", "172.23.207.33"),
     "PORT": int(os.getenv("REDIS_PORT", "6379")),
     "QUEUES": {
         "UNPACK": "list:unpack",
@@ -36,7 +36,7 @@ REDIS = {
 
 # Postgres
 POSTGRES = {
-    "HOST": os.getenv("POSTGRES_HOST", "10.0.0.1"),
+    "HOST": os.getenv("POSTGRES_HOST", "172.23.207.33"),
     "PORT": int(os.getenv("POSTGRES_PORT", "5432")),
     "DATABASE": os.getenv("POSTGRES_DB", "transcript_db"),
     "USER": os.getenv("POSTGRES_USER", "transcript_user"),
@@ -74,7 +74,7 @@ S3 = {
 # Local Storage - GPU workers (Cinder volumes)
 LOCAL = {
     "SCRATCH_ROOT": Path(os.getenv("SCRATCH_ROOT", "/data/scratch")),
-    "MODELS_ROOT": Path(os.getenv("MODELS_ROOT", "/data/models")),
+    "MODELS_ROOT": Path(os.getenv("MODELS_ROOT", "/mnt/models")),
 }
 
 # Processing settings

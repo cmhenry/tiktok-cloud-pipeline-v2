@@ -7,7 +7,7 @@ app_user: ubuntu
 app_group: ubuntu
 
 # Pipeline code location
-pipeline_repo: "https://github.com/YOUR_ORG/tiktok-cloud-pipeline-v2.git"  # CHANGE
+pipeline_repo: "https://github.com/cmhenry/tiktok-cloud-pipeline-v2"  # CHANGE
 pipeline_dir: /opt/pipeline
 pipeline_venv: /opt/pipeline/venv
 
