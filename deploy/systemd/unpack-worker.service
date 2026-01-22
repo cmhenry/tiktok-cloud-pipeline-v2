@@ -6,10 +6,8 @@ After=network.target
 Type=simple
 User=ubuntu
 WorkingDirectory=/opt/pipeline
-Environment=REDIS_HOST=10.0.0.1
-Environment=POSTGRES_HOST=10.0.0.1
-Environment=VOLUME_ROOT=/mnt/data
-ExecStart=/opt/pipeline/venv/bin/python unpack_worker.py
+EnvironmentFile=/opt/pipeline/.env
+ExecStart=/opt/pipeline/venv/bin/python -m src.unpack_worker
 Restart=always
 RestartSec=10
 

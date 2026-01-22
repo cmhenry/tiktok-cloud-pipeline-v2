@@ -6,15 +6,12 @@ After=network.target
 Type=simple
 User=ubuntu
 WorkingDirectory=/opt/pipeline
-Environment=REDIS_HOST=10.0.0.1
-Environment=POSTGRES_HOST=10.0.0.1
-Environment=VOLUME_ROOT=/mnt/data
-Environment=CUDA_VISIBLE_DEVICES=0
-ExecStart=/opt/pipeline/venv/bin/python gpu_worker.py
+EnvironmentFile=/opt/pipeline/.env
+ExecStart=/opt/pipeline/venv/bin/python -m src.gpu_worker
 Restart=always
 RestartSec=30
 
-# Give GPU worker more time to load models before restart
+# GPU workers need time to load models
 TimeoutStartSec=300
 
 # Logging
