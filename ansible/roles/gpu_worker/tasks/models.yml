@@ -56,6 +56,7 @@
   find:
     paths: "{{ gemma_model_path }}"
     patterns: "*.safetensors"
+    follow: yes
   register: gemma_check
   failed_when: gemma_check.files | length == 0
   tags: [models, verify]
