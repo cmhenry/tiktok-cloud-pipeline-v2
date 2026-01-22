@@ -2,7 +2,7 @@
 # GPU Worker Specific Variables
 
 # Cinder volume configuration
-data_volume_device: /dev/vdb
+data_volume_device: /dev/sdb
 data_volume_mount: /data
 data_volume_fstype: ext4
 
@@ -17,7 +17,7 @@ cope_adapter_path: "{{ models_root }}/cope-a-adapter"
 
 # Processing settings
 whisperx_model: large-v2
-opus_bitrate: 48k
+opus_bitrate: 16k
 ffmpeg_workers: 4
 gpu_batch_size: 32
 
