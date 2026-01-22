@@ -10,22 +10,9 @@
     group: "{{ app_group }}"
     mode: '0755'
   loop:
-    - "{{ whisperx_model_path }}"
     - "{{ gemma_model_path }}"
     - "{{ cope_adapter_path }}"
   tags: [models]
-
-- name: Sync WhisperX model
-  synchronize:
-    src: "{{ model_source_path }}/whisperx/"
-    dest: "{{ whisperx_model_path }}/"
-    mode: pull
-    recursive: yes
-    delete: yes
-    rsync_opts:
-      - "--info=progress2"
-  delegate_to: "{{ inventory_hostname }}"
-  tags: [models, whisperx]
 
 - name: Sync Gemma-2-9B model
   synchronize:
@@ -54,7 +41,6 @@
 - name: Check model directory sizes
   command: du -sh {{ item }}
   loop:
-    - "{{ whisperx_model_path }}"
     - "{{ gemma_model_path }}"
     - "{{ cope_adapter_path }}"
   register: model_sizes
@@ -65,13 +51,6 @@
   debug:
     msg: "{{ model_sizes.results | map(attribute='stdout') | list }}"
   tags: [models]
-
-- name: Verify WhisperX model files exist
-  stat:
-    path: "{{ whisperx_model_path }}/model.bin"
-  register: whisperx_check
-  failed_when: not whisperx_check.stat.exists
-  tags: [models, verify]
 
 - name: Verify Gemma model files exist
   find:

@@ -11,7 +11,7 @@ scratch_root: /data/scratch
 models_root: /mnt/models
 
 # Model paths - using /mnt/models symlink to /data/models
-whisperx_model_path: "{{ models_root }}/whisperx"
+# Note: WhisperX auto-downloads models via whisperx.load_model(), no local path needed
 gemma_model_path: "{{ models_root }}/gemma-2-9b"
 cope_adapter_path: "{{ models_root }}/cope-a-adapter"
 
