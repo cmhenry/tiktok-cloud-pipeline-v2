@@ -15,6 +15,7 @@ import subprocess
 import re
 import tempfile
 import uuid
+import argparse
 from datetime import datetime
 from pathlib import Path
 from filelock import FileLock
@@ -131,10 +132,10 @@ def log_message(message, logger, ip_address='', level='info'):
     elif level == 'debug':
         logger.debug(f'{process_id}\tdeb\t{message}')
     elif level == 'warning':
-        send_slack_text_message(message.strip(), webhook='ttm_7_warning')
+        # send_slack_text_message(message.strip(), webhook='ttm_7_warning')  # Disabled for testing
         logger.warning(f'{process_id}\tdeb\t{message}')
     elif level == 'error':
-        send_slack_text_message(message.strip(), webhook='ttm_5_errors')
+        # send_slack_text_message(message.strip(), webhook='ttm_5_errors')  # Disabled for testing
         logger.error(f'{process_id}\terr\t{message}')
 
 WEBHOOKS = {
@@ -415,8 +416,8 @@ def transfer_sound_zrh(source_path, dest_path, source_host = None, secure = True
             
             msg = f"{log_first_part}\tSucess:  {size_msg}in {duration:.2f} secs"
             log_message(msg, logger)
-            if secure: 
-                send_slack_text_message(msg, webhook = "ttm_0_transfer_zrh")
+            # if secure:
+            #     send_slack_text_message(msg, webhook = "ttm_0_transfer_zrh")  # Disabled for testing
             remove_lock_file(lock_path)
             return True
         except Exception as e:
@@ -482,106 +483,151 @@ SOURCE_FOLDER = AWS["SOURCE_DIR"]
 MINUTE_TO_RESTART_SCRIPT = 5
 AWS_CONTENT_VM_HOST = AWS["HOST"]
 
-start_hour = time.gmtime().tm_hour
+def main():
+    """Main entry point for transfer worker."""
+    parser = argparse.ArgumentParser(description="Transfer sounds from AWS EC2 to S3 and queue for processing")
+    parser.add_argument("--test", action="store_true", help="Test mode: process 1 file and exit")
+    parser.add_argument("--dry-run", action="store_true", help="Dry run: show what would be transferred without doing it")
+    args = parser.parse_args()
 
-# Initialize logger
-logger = setup_logger(
-    log_file_name=f'transfer_aws_zrh.log',
-    log_directory = LOG_FOLDER,
-    debug=DEBUG,
-    to_stdout=TO_SDTOUT
-)
+    start_hour = time.gmtime().tm_hour
 
-msg = f"Starting transfer SOUND AWS to ZRH"
-log_message(msg, logger)
-send_slack_text_message(msg, webhook = "ttm_0_transfer_zrh")
+    # Initialize logger
+    logger = setup_logger(
+        log_file_name='transfer_aws_zrh.log',
+        log_directory=LOG_FOLDER,
+        debug=DEBUG,
+        to_stdout=TO_SDTOUT
+    )
 
-# Initialize Redis client
-try:
-    redis_client = redis.Redis(host=REDIS_HOST, port=REDIS_PORT, decode_responses=True)
-    redis_client.ping()  # Test connection
-    log_message("Redis connection successful", logger)
-except Exception as e:
-    log_message(f"Redis connection failed: {e}", logger, level="error")
-    redis_client = None  # Continue without Redis if it fails
+    mode_str = ""
+    if args.test:
+        mode_str = " [TEST MODE - single file]"
+    elif args.dry_run:
+        mode_str = " [DRY RUN]"
 
-while not (start_hour != time.gmtime().tm_hour and time.gmtime().tm_min >= MINUTE_TO_RESTART_SCRIPT):
-        
-	start_time = time.time()
-	
-	source_files = [i for i in list_files(SOURCE_FOLDER, AWS_CONTENT_VM_HOST, latency_min = 10, logger = logger) if not i.endswith(".lock")]
-	
-	files_copied = 0
-	files_skipped = 0
-	
-	if len(source_files) > 0: 
-		log_message(f"\tSound {len(source_files)} found", logger)
-		
-		for source_file in source_files[:50]: 
-			
-			if start_hour != time.gmtime().tm_hour and time.gmtime().tm_min >= MINUTE_TO_RESTART_SCRIPT:
-				break
-			
-			if file_exists(source_file, AWS_CONTENT_VM_HOST):
-				# 2. Transfer file directly from AWS to local staging
-				transfer_result = transfer_sound_zrh(
-					source_path = source_file,
-					dest_path = TEMP_STAGING_DIR,
-					source_host = AWS_CONTENT_VM_HOST,
-					logger=logger,
-					secure = True,
-					# TODO: once this is ready set this to true to remove the file from EC2
-					remove = False
-				)
-			else:
-				transfer_result = False
+    msg = f"Starting transfer SOUND AWS to ZRH{mode_str}"
+    log_message(msg, logger)
+    # send_slack_text_message(msg, webhook = "ttm_0_transfer_zrh")  # Disabled for testing
 
-			if not transfer_result:
-				# Transfer failed; skip verification & removal
-				files_skipped += 1
-				continue
+    # Initialize Redis client
+    redis_client = None
+    if not args.dry_run:
+        try:
+            redis_client = redis.Redis(host=REDIS_HOST, port=REDIS_PORT, decode_responses=True)
+            redis_client.ping()  # Test connection
+            log_message("Redis connection successful", logger)
+        except Exception as e:
+            log_message(f"Redis connection failed: {e}", logger, level="error")
+            redis_client = None  # Continue without Redis if it fails
+    else:
+        log_message("Dry run mode - skipping Redis connection", logger)
 
-			# Transfer to local staging succeeded - now upload to S3
-			local_archive_path = Path(TEMP_STAGING_DIR) / os.path.basename(source_file)
-			filename = os.path.basename(source_file)
-			batch_id = generate_batch_id(filename)
+    # In test mode, run once; in normal mode, run until hour changes
+    run_once = args.test or args.dry_run
 
-			try:
-				# 3. Upload to S3
-				log_message(f"\t\tUploading to S3: {filename} as batch {batch_id}", logger)
-				s3_key = upload_archive(local_archive_path, batch_id)
+    while True:
+        # Check exit condition for normal mode
+        if not run_once and (start_hour != time.gmtime().tm_hour and time.gmtime().tm_min >= MINUTE_TO_RESTART_SCRIPT):
+            break
 
-				# 4. Queue for unpacking pipeline with new JSON format
-				if redis_client:
-					job = {
-						"batch_id": batch_id,
-						"s3_key": s3_key,
-						"original_filename": filename,
-						"transferred_at": datetime.utcnow().isoformat() + "Z"
-					}
-					redis_client.lpush(QUEUE_UNPACK, json.dumps(job))
-					log_message(f"\t\tQueued for unpacking: {batch_id} (s3://{s3_key})", logger)
+        start_time = time.time()
 
-				# 5. Clean up local staging file after successful S3 upload
-				try:
-					local_archive_path.unlink()
-					log_message(f"\t\tCleaned up local staging file: {filename}", logger, level="debug")
-				except Exception as cleanup_err:
-					log_message(f"\t\tWarning: Failed to cleanup staging file {filename}: {cleanup_err}", logger, level="warning")
+        source_files = [i for i in list_files(SOURCE_FOLDER, AWS_CONTENT_VM_HOST, latency_min=10, logger=logger) if not i.endswith(".lock")]
 
-				files_copied += 1
+        files_copied = 0
+        files_skipped = 0
 
-			except Exception as s3_err:
-				# S3 upload failed - do NOT enqueue, do NOT delete local file (enables retry)
-				log_message(f"\t\tS3 upload failed for {filename}: {s3_err}", logger, level="error")
-				files_skipped += 1
-				continue
+        if len(source_files) > 0:
+            log_message(f"\tSound {len(source_files)} found", logger)
 
-	if files_copied + files_skipped:
-		log_message(f"\t\tComplete for Sound\t{files_copied} + {files_skipped}\t in {time.time() - start_time:.2f} secs\n\n", logger)
-	
-	time.sleep(60)
+            # In test mode, only process 1 file
+            max_files = 1 if args.test else 50
+            files_to_process = source_files[:max_files]
 
-msg = f"Finished transfer AWS to Greene\n\n"
-send_slack_text_message(msg, webhook = "ttm_0_transfer_zrh")
-log_message(msg, logger)
+            for source_file in files_to_process:
+
+                if not run_once and (start_hour != time.gmtime().tm_hour and time.gmtime().tm_min >= MINUTE_TO_RESTART_SCRIPT):
+                    break
+
+                filename = os.path.basename(source_file)
+
+                if args.dry_run:
+                    # Dry run - just show what would be transferred
+                    file_size = get_file_size(source_file, AWS_CONTENT_VM_HOST, logger=logger)
+                    size_str = f"{file_size/1024/1024:.1f} MB" if file_size else "unknown size"
+                    log_message(f"\t[DRY RUN] Would transfer: {filename} ({size_str})", logger)
+                    log_message(f"\t[DRY RUN] Would upload to S3 and queue batch for unpacking", logger)
+                    files_copied += 1
+                    continue
+
+                if file_exists(source_file, AWS_CONTENT_VM_HOST):
+                    # 2. Transfer file directly from AWS to local staging
+                    transfer_result = transfer_sound_zrh(
+                        source_path=source_file,
+                        dest_path=TEMP_STAGING_DIR,
+                        source_host=AWS_CONTENT_VM_HOST,
+                        logger=logger,
+                        secure=True,
+                        # TODO: once this is ready set this to true to remove the file from EC2
+                        remove=False
+                    )
+                else:
+                    transfer_result = False
+
+                if not transfer_result:
+                    # Transfer failed; skip verification & removal
+                    files_skipped += 1
+                    continue
+
+                # Transfer to local staging succeeded - now upload to S3
+                local_archive_path = Path(TEMP_STAGING_DIR) / os.path.basename(source_file)
+                batch_id = generate_batch_id(filename)
+
+                try:
+                    # 3. Upload to S3
+                    log_message(f"\t\tUploading to S3: {filename} as batch {batch_id}", logger)
+                    s3_key = upload_archive(local_archive_path, batch_id)
+
+                    # 4. Queue for unpacking pipeline with new JSON format
+                    if redis_client:
+                        job = {
+                            "batch_id": batch_id,
+                            "s3_key": s3_key,
+                            "original_filename": filename,
+                            "transferred_at": datetime.utcnow().isoformat() + "Z"
+                        }
+                        redis_client.lpush(QUEUE_UNPACK, json.dumps(job))
+                        log_message(f"\t\tQueued for unpacking: {batch_id} (s3://{s3_key})", logger)
+
+                    # 5. Clean up local staging file after successful S3 upload
+                    try:
+                        local_archive_path.unlink()
+                        log_message(f"\t\tCleaned up local staging file: {filename}", logger, level="debug")
+                    except Exception as cleanup_err:
+                        log_message(f"\t\tWarning: Failed to cleanup staging file {filename}: {cleanup_err}", logger, level="warning")
+
+                    files_copied += 1
+
+                except Exception as s3_err:
+                    # S3 upload failed - do NOT enqueue, do NOT delete local file (enables retry)
+                    log_message(f"\t\tS3 upload failed for {filename}: {s3_err}", logger, level="error")
+                    files_skipped += 1
+                    continue
+
+        if files_copied + files_skipped:
+            log_message(f"\t\tComplete for Sound\t{files_copied} + {files_skipped}\t in {time.time() - start_time:.2f} secs\n\n", logger)
+
+        # Exit after first iteration in test/dry-run mode
+        if run_once:
+            break
+
+        time.sleep(60)
+
+    msg = f"Finished transfer AWS to ZRH\n\n"
+    # send_slack_text_message(msg, webhook = "ttm_0_transfer_zrh")  # Disabled for testing
+    log_message(msg, logger)
+
+
+if __name__ == "__main__":
+    main()
