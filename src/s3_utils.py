@@ -56,7 +56,7 @@ def get_s3_client():
         aws_access_key_id=S3["ACCESS_KEY"],
         aws_secret_access_key=S3["SECRET_KEY"],
         config=BotoConfig(
-            signature_version="s3",  # Use v2 for radosgw compatibility
+            signature_version="s3v4",
             s3={"addressing_style": "path"},
         ),
     )
@@ -271,13 +271,9 @@ def check_s3_connection() -> bool:
         endpoint = S3["ENDPOINT"]
 
         logger.debug(f"Testing S3: endpoint={endpoint}, bucket={bucket}")
-        # Use put_object + delete_object for radosgw compatibility.
-        # head_bucket requires permissions radosgw EC2 credentials may lack,
-        # and list operations can fail with SignatureDoesNotMatch on radosgw
-        # with S3 v2 signatures. put_object is known to work reliably.
-        test_key = "_connectivity_check"
-        client.put_object(Bucket=bucket, Key=test_key, Body=b"ok")
-        client.delete_object(Bucket=bucket, Key=test_key)
+        # Use list_objects_v2 instead of head_bucket for radosgw compatibility.
+        # head_bucket requires permissions radosgw EC2 credentials may lack.
+        client.list_objects_v2(Bucket=bucket, MaxKeys=1)
         logger.info(f"S3 connection verified: bucket '{bucket}' accessible")
         return True
     except ClientError as e:
