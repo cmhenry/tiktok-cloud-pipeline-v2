@@ -52,8 +52,8 @@ echo "[3/6] Configuring PostgreSQL..."
 # Create database and user
 sudo -u postgres psql <<EOF
 CREATE USER transcript_user WITH PASSWORD 'transcript_pass';
-CREATE DATABASE audio_pipeline OWNER pipeline;
-GRANT ALL PRIVILEGES ON DATABASE audio_pipeline TO pipeline;
+CREATE DATABASE transcript_db OWNER transcript_user;
+GRANT ALL PRIVILEGES ON DATABASE transcript_db TO transcript_user;
 EOF
 
 # Allow network connections (edit pg_hba.conf)
@@ -62,7 +62,7 @@ PG_HBA="/etc/postgresql/${PG_VERSION}/main/pg_hba.conf"
 
 # Add line for internal network (adjust 10.0.0.0/24 to your subnet)
 if ! grep -q "10.0.0.0/24" "$PG_HBA"; then
-    echo "host    audio_pipeline  pipeline    10.0.0.0/24    md5" >> "$PG_HBA"
+    echo "host    transcript_db   transcript_user    10.0.0.0/24    md5" >> "$PG_HBA"
 fi
 
 # Listen on all interfaces
@@ -79,12 +79,12 @@ echo "[4/6] Running database schema migration..."
 
 # Copy schema file to coordinator (assumes it's in current dir or specify path)
 if [ -f "/opt/pipeline/schema.sql" ]; then
-    sudo -u postgres psql -d audio_pipeline -f /opt/pipeline/schema.sql
+    sudo -u postgres psql -d transcript_db -f /opt/pipeline/schema.sql
     echo "Schema applied successfully"
 else
     echo "WARNING: schema.sql not found at /opt/pipeline/schema.sql"
     echo "Copy schema.sql to /opt/pipeline/ and run:"
-    echo "  sudo -u postgres psql -d audio_pipeline -f /opt/pipeline/schema.sql"
+    echo "  sudo -u postgres psql -d transcript_db -f /opt/pipeline/schema.sql"
 fi
 
 # -----------------------------------------------------------------------------
@@ -122,9 +122,9 @@ REDIS_HOST=127.0.0.1
 REDIS_PORT=6379
 POSTGRES_HOST=127.0.0.1
 POSTGRES_PORT=5432
-POSTGRES_DB=audio_pipeline
-POSTGRES_USER=pipeline
-POSTGRES_PASSWORD=changeme_pipeline_password
+POSTGRES_DB=transcript_db
+POSTGRES_USER=transcript_user
+POSTGRES_PASSWORD=transcript_pass
 VOLUME_ROOT=/mnt/data
 EOF
 
@@ -143,9 +143,9 @@ echo ""
 echo "Next steps:"
 echo "  1. Update /opt/pipeline/.env with secure password"
 echo "  2. Mount shared volume: sudo mount /dev/YOUR_DEVICE /mnt/data"
-echo "  3. Apply schema if not done: sudo -u postgres psql -d audio_pipeline -f /opt/pipeline/schema.sql"
+echo "  3. Apply schema if not done: sudo -u postgres psql -d transcript_db -f /opt/pipeline/schema.sql"
 echo "  4. Distribute coordinator IP to worker VMs (for REDIS_HOST, POSTGRES_HOST)"
 echo ""
 echo "Test connections:"
 echo "  redis-cli ping"
-echo "  psql -h localhost -U pipeline -d audio_pipeline -c 'SELECT 1'"
+echo "  psql -h localhost -U transcript_user -d transcript_db -c 'SELECT 1'"

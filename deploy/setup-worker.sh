@@ -27,7 +27,7 @@ POSTGRES_HOST="${POSTGRES_HOST:-$COORDINATOR_IP}"
 POSTGRES_PORT="${POSTGRES_PORT:-5432}"
 POSTGRES_DB="${POSTGRES_DB:-transcript_db}"
 POSTGRES_USER="${POSTGRES_USER:-transcript_user}"
-POSTGRES_PASSWORD="${POSTGRES_PASSWORD:-changeme}"
+POSTGRES_PASSWORD="${POSTGRES_PASSWORD:-transcript_pass}"
 
 # S3/Object Storage (OpenStack Swift compatible)
 S3_ENDPOINT="${S3_ENDPOINT:-}"
@@ -73,14 +73,14 @@ fi
 # =============================================================================
 # 2. SYSTEM PACKAGES
 # =============================================================================
-echo "[1/10] Installing system packages..."
+echo "[1/11] Installing system packages..."
 apt-get update -qq
 apt-get install -y -qq python3-venv python3-pip ffmpeg git
 
 # =============================================================================
 # 3. GPU DRIVER CHECK
 # =============================================================================
-echo "[2/10] Checking GPU setup..."
+echo "[2/11] Checking GPU setup..."
 
 if lspci | grep -qi nvidia; then
     echo "  NVIDIA GPU detected"
@@ -107,7 +107,7 @@ fi
 # =============================================================================
 # 4. MOUNT CINDER VOLUME /dev/sdb -> /data
 # =============================================================================
-echo "[3/10] Setting up Cinder volume..."
+echo "[3/11] Setting up Cinder volume..."
 
 # Check if /dev/sdb exists
 if [[ ! -b /dev/sdb ]]; then
@@ -144,7 +144,7 @@ fi
 # =============================================================================
 # 5. CREATE DIRECTORY STRUCTURE AND SYMLINKS
 # =============================================================================
-echo "[4/10] Creating directory structure..."
+echo "[4/11] Creating directory structure..."
 
 # Local storage directories (on Cinder volume)
 mkdir -p /data/scratch
@@ -178,7 +178,7 @@ echo "    /mnt/data          - Shared volume mount point"
 # =============================================================================
 # 6. PYTHON VIRTUAL ENVIRONMENT
 # =============================================================================
-echo "[5/10] Setting up Python environment..."
+echo "[5/11] Setting up Python environment..."
 
 python3 -m venv /opt/pipeline/venv
 source /opt/pipeline/venv/bin/activate
@@ -195,7 +195,7 @@ echo "  Python environment ready at /opt/pipeline/venv"
 # =============================================================================
 # 7. GENERATE .env FILE
 # =============================================================================
-echo "[6/10] Generating .env file..."
+echo "[6/11] Generating .env file..."
 
 cat > /opt/pipeline/.env <<EOF
 # GPU Worker Configuration
@@ -241,7 +241,7 @@ echo "  Created /opt/pipeline/.env"
 # =============================================================================
 # 8. CREATE SYSTEMD SERVICE FILES
 # =============================================================================
-echo "[7/10] Creating systemd services..."
+echo "[7/11] Creating systemd services..."
 
 # GPU Worker Service
 cat > /etc/systemd/system/gpu-worker.service <<EOF
@@ -304,7 +304,7 @@ echo "  Reloaded systemd"
 # =============================================================================
 # 9. SCRATCH CLEANUP CRON JOB
 # =============================================================================
-echo "[8/10] Setting up scratch cleanup cron..."
+echo "[8/11] Setting up scratch cleanup cron..."
 
 # Cleanup files older than 24 hours in scratch directory
 CRON_FILE="/etc/cron.d/pipeline-scratch-cleanup"
@@ -323,7 +323,7 @@ echo "  Added cron job to clean scratch files older than 24h"
 # =============================================================================
 # 10. SET OWNERSHIP
 # =============================================================================
-echo "[9/10] Setting file ownership..."
+echo "[9/11] Setting file ownership..."
 
 chown -R ubuntu:ubuntu /opt/pipeline
 chown -R ubuntu:ubuntu /data 2>/dev/null || true
@@ -332,7 +332,7 @@ chown -R ubuntu:ubuntu /mnt/data 2>/dev/null || true
 # =============================================================================
 # 11. VERIFICATION
 # =============================================================================
-echo "[10/10] Verifying setup..."
+echo "[10/11] Verifying setup..."
 echo ""
 
 ERRORS=0
@@ -387,6 +387,32 @@ else
 fi
 
 # =============================================================================
+# 12. CONNECTIVITY CHECK
+# =============================================================================
+echo "[11/11] Testing service connectivity..."
+echo ""
+
+CONN_ERRORS=0
+
+# Test each service individually for clear per-service feedback
+for SERVICE in redis postgres s3; do
+    if /opt/pipeline/venv/bin/python -m tests.test_connectivity --service "$SERVICE" 2>/dev/null; then
+        echo "  [OK] $SERVICE connectivity"
+    else
+        echo "  [WARN] $SERVICE connectivity failed"
+        echo "         Check /opt/pipeline/.env and verify the $SERVICE service is reachable"
+        CONN_ERRORS=$((CONN_ERRORS+1))
+    fi
+done
+
+if [[ $CONN_ERRORS -gt 0 ]]; then
+    echo ""
+    echo "  $CONN_ERRORS service(s) unreachable — this is expected if coordinator is not yet running."
+    echo "  Re-run later: cd /opt/pipeline && ./venv/bin/python -m tests.test_connectivity -v"
+fi
+echo ""
+
+# =============================================================================
 # SUMMARY
 # =============================================================================
 echo ""
@@ -410,6 +436,7 @@ echo "  1. Download models to /data/models/gemma-2-9b/"
 echo "  2. Download adapter to /data/models/cope-a-adapter/"
 echo "  3. Mount shared volume: sudo mount <device> /mnt/data"
 echo "  4. Verify .env settings: cat /opt/pipeline/.env"
+echo "  5. Re-run connectivity tests: cd /opt/pipeline && ./venv/bin/python -m tests.test_connectivity -v"
 echo ""
 echo "Start services:"
 echo "  sudo systemctl enable --now gpu-worker unpack-worker"

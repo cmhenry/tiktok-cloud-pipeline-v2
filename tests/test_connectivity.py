@@ -22,7 +22,7 @@ from pathlib import Path
 # Add src to path for imports
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-from src.config import REDIS, POSTGRES, S3
+from src.config import REDIS, POSTGRES, S3, _ENV_FILE_LOADED
 
 
 class ConnectivityTester:
@@ -36,6 +36,33 @@ class ConnectivityTester:
         """Print log message."""
         prefix = {"INFO": "[*]", "OK": "[+]", "FAIL": "[-]", "WARN": "[!]"}
         print(f"{prefix.get(level, '[*]')} {msg}")
+
+    def print_config(self):
+        """Print resolved configuration so the user can spot misconfigurations."""
+        def _mask(value):
+            if not value:
+                return "(not set)"
+            if len(value) <= 4:
+                return "****"
+            return value[:2] + "****" + value[-2:]
+
+        self.log("=" * 60)
+        self.log("Resolved Configuration")
+        self.log("=" * 60)
+        self.log(f".env file: {_ENV_FILE_LOADED or 'none found (using defaults)'}")
+        self.log(f"Redis:     {REDIS['HOST']}:{REDIS['PORT']}")
+        self.log(
+            f"Postgres:  {POSTGRES['HOST']}:{POSTGRES['PORT']}  "
+            f"db={POSTGRES['DATABASE']}  user={POSTGRES['USER']}  "
+            f"password={_mask(POSTGRES['PASSWORD'])}"
+        )
+        self.log(
+            f"S3:        endpoint={S3['ENDPOINT'] or '(not set)'}  "
+            f"bucket={S3['BUCKET']}  "
+            f"access_key={_mask(S3['ACCESS_KEY'] or '')}  "
+            f"secret_key={_mask(S3['SECRET_KEY'] or '')}"
+        )
+        print()
 
     def test_redis(self) -> bool:
         """
@@ -289,6 +316,7 @@ class ConnectivityTester:
 
     def run_all(self) -> bool:
         """Run all connectivity tests."""
+        self.print_config()
         self.log("=" * 60)
         self.log("Pipeline Connectivity Tests")
         self.log("=" * 60)
@@ -347,6 +375,7 @@ def main():
     if args.service == "all":
         success = tester.run_all()
     else:
+        tester.print_config()
         test_map = {
             "redis": tester.test_redis,
             "postgres": tester.test_postgres,

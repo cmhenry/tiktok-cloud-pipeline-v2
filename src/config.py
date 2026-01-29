@@ -10,9 +10,20 @@ from pathlib import Path
 
 from dotenv import load_dotenv
 
-# Load .env file from project root (if present)
-# This allows local development without exporting vars to shell
-load_dotenv()
+# Load .env file with explicit path search so it works regardless of CWD
+_ENV_FILE_LOADED = None
+_ENV_SEARCH_PATHS = [
+    Path(__file__).resolve().parent.parent / ".env",  # repo root
+    Path("/opt/pipeline/.env"),                         # production path
+]
+
+for _candidate in _ENV_SEARCH_PATHS:
+    if _candidate.is_file():
+        load_dotenv(_candidate)
+        _ENV_FILE_LOADED = str(_candidate)
+        break
+else:
+    load_dotenv()  # fallback to dotenv default CWD search
 
 # Paths - shared cloud volume
 VOLUME_ROOT = Path(os.getenv("VOLUME_ROOT", "/mnt/data"))
