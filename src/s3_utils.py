@@ -273,7 +273,7 @@ def check_s3_connection() -> bool:
         endpoint = S3["ENDPOINT"]
 
         logger.debug(f"Testing S3: endpoint={endpoint}, bucket={bucket}")
-        client.list_objects_v2(Bucket=bucket, MaxKeys=1)
+        client.head_bucket(Bucket=bucket)
         logger.info(f"S3 connection verified: bucket '{bucket}' accessible")
         return True
     except ClientError as e:

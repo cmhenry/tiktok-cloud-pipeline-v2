@@ -330,7 +330,7 @@ class IntegrationTest:
             client = get_s3_client()
 
             # List objects in processed/ prefix
-            response = client.list_objects_v2(
+            response = client.list_objects(
                 Bucket=S3["BUCKET"],
                 Prefix=S3["PROCESSED_PREFIX"],
                 MaxKeys=100,
@@ -427,7 +427,7 @@ class IntegrationTest:
         for audio_id in self.created_audio_ids:
             try:
                 # Find and delete processed opus files
-                response = client.list_objects_v2(
+                response = client.list_objects(
                     Bucket=S3["BUCKET"],
                     Prefix=f"{S3['PROCESSED_PREFIX']}",
                     MaxKeys=1000,
