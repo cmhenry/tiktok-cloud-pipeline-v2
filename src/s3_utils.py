@@ -38,7 +38,7 @@ def get_s3_client():
     """
     Get S3 client configured for OpenStack Swift/S3-compatible endpoint.
 
-    Uses S3 signature v4 for all operations.
+    Uses S3 signature v2 for all operations.
     Client is cached for reuse across calls.
 
     Returns:
@@ -60,11 +60,8 @@ def get_s3_client():
         aws_access_key_id=S3["ACCESS_KEY"],
         aws_secret_access_key=S3["SECRET_KEY"],
         config=BotoConfig(
-            signature_version="s3v4",
-            s3={
-                "addressing_style": "path",
-                "payload_signing_enabled": False,
-            },
+            signature_version="s3",
+            s3={"addressing_style": "path"},
         ),
     )
 
