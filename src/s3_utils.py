@@ -271,7 +271,10 @@ def check_s3_connection() -> bool:
         endpoint = S3["ENDPOINT"]
 
         logger.debug(f"Testing S3: endpoint={endpoint}, bucket={bucket}")
-        client.head_bucket(Bucket=bucket)
+        # Use list_objects_v2 instead of head_bucket for radosgw compatibility.
+        # head_bucket requires ListBucket permission that radosgw EC2 credentials
+        # may not have, even when object read/write works fine.
+        client.list_objects_v2(Bucket=bucket, MaxKeys=1)
         logger.info(f"S3 connection verified: bucket '{bucket}' accessible")
         return True
     except ClientError as e:
