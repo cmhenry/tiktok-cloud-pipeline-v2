@@ -37,10 +37,19 @@ else
     FAIL_COUNT=$((FAIL_COUNT + 1))
 fi
 
-# Show effective bind directive
+# Show effective bind directives and warn about conflicts
 echo "       Effective bind directives:"
-grep -rh '^\s*bind ' /etc/redis/ 2>/dev/null | sed 's/^/         /'
-if [ $? -ne 0 ]; then
+BIND_LINES=$(grep -rh '^\s*bind ' /etc/redis/ 2>/dev/null)
+if [ -n "$BIND_LINES" ]; then
+    echo "$BIND_LINES" | sed 's/^/         /'
+    BIND_COUNT=$(echo "$BIND_LINES" | wc -l)
+    if [ "$BIND_COUNT" -gt 1 ]; then
+        echo "[FAIL] Multiple bind directives found — the last one wins and may"
+        echo "       override your intended setting. Comment out the bind in the"
+        echo "       main redis.conf so only pipeline.conf controls binding."
+        FAIL_COUNT=$((FAIL_COUNT + 1))
+    fi
+else
     echo "         (none found — defaults apply)"
 fi
 

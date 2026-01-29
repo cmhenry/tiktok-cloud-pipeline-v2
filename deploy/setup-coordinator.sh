@@ -23,6 +23,10 @@ echo "[2/6] Configuring Redis..."
 cp /etc/redis/redis.conf /etc/redis/redis.conf.backup
 mkdir -p /etc/redis/redis.conf.d
 
+# Comment out any existing bind directive in the main config so our
+# pipeline.conf override is the only one in effect.
+sed -i 's/^bind /#bind /' /etc/redis/redis.conf
+
 # Configure Redis for network access
 cat > /etc/redis/redis.conf.d/pipeline.conf <<EOF
 # Audio pipeline Redis config
