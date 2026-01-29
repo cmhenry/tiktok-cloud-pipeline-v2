@@ -61,7 +61,10 @@ def get_s3_client():
         aws_secret_access_key=S3["SECRET_KEY"],
         config=BotoConfig(
             signature_version="s3v4",
-            s3={"addressing_style": "path"},
+            s3={
+                "addressing_style": "path",
+                "payload_signing_enabled": False,
+            },
         ),
     )
 
