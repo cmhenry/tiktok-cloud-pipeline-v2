@@ -312,9 +312,6 @@ class GPUWorker:
                 f"score={classification['score']:.2f}, s3={s3_opus_key}"
             )
 
-            # 9. Track batch progress (NEW)
-            self.track_batch_progress(batch_id)
-
             return True
 
         except Exception as e:
@@ -327,10 +324,12 @@ class GPUWorker:
                     update_audio_status(audio_id, "failed")
                 except Exception:
                     pass
-            # Note: We don't increment batch counter for failed items
-            # This means batch may never "complete" if items fail
-            # Recommend periodic cleanup of old scratch directories
             return False
+
+        finally:
+            # Always track batch progress, even on failure.
+            # Without this, a single failed file permanently stalls the batch.
+            self.track_batch_progress(batch_id)
 
     def track_batch_progress(self, batch_id: str):
         """
@@ -377,13 +376,14 @@ class GPUWorker:
         # Clean up scratch directory (idempotent)
         cleanup_scratch(batch_id)
 
-        # Clean up Redis keys (idempotent - DELETE ignores missing keys)
+        # Expire Redis keys after 60s instead of immediate deletion.
+        # This gives monitoring/test scripts time to observe completion.
         if self.redis_client:
-            self.redis_client.delete(f"batch:{batch_id}:total")
-            self.redis_client.delete(f"batch:{batch_id}:processed")
-            self.redis_client.delete(f"batch:{batch_id}:s3_key")
+            self.redis_client.expire(f"batch:{batch_id}:total", 60)
+            self.redis_client.expire(f"batch:{batch_id}:processed", 60)
+            self.redis_client.expire(f"batch:{batch_id}:s3_key", 60)
 
-        logger.info(f"Batch {batch_id}: scratch cleaned, Redis keys removed")
+        logger.info(f"Batch {batch_id}: scratch cleaned, Redis keys expire in 60s")
 
     def process_batch(self, items: list[dict]) -> tuple[int, int]:
         """
