@@ -52,6 +52,14 @@ class ConnectivityTester:
                 "the coordinator or re-run `sudo ./deploy/setup-coordinator.sh`.",
                 "WARN",
             )
+        if "connection reset" in err:
+            self.log(
+                f"{service} accepted the connection but immediately dropped it. "
+                "This usually means protected-mode is enabled. Re-run "
+                "`sudo ./deploy/setup-coordinator.sh` or add 'protected-mode no' "
+                "to the Redis config.",
+                "WARN",
+            )
         if "timeout" in err or "timed out" in err:
             self.log(
                 f"Firewall or routing issue reaching {service}. Verify the "

@@ -31,9 +31,10 @@ sed -i 's/^bind /#bind /' /etc/redis/redis.conf
 cat > /etc/redis/redis.conf.d/pipeline.conf <<EOF
 # Audio pipeline Redis config
 bind 0.0.0.0
+protected-mode no
 maxmemory 4gb
 maxmemory-policy allkeys-lru
-# Optional: require password
+# Optional: require password (re-enable protected-mode if you set one)
 # requirepass your_redis_password
 EOF
 

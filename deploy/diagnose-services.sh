@@ -53,6 +53,17 @@ else
     echo "         (none found — defaults apply)"
 fi
 
+# Check protected-mode
+PROTECTED=$(grep -rh '^\s*protected-mode' /etc/redis/ 2>/dev/null | tail -1 | awk '{print $2}')
+if [ "$PROTECTED" = "no" ]; then
+    echo "[OK]   Redis protected-mode is disabled"
+elif [ "$PROTECTED" = "yes" ] || [ -z "$PROTECTED" ]; then
+    echo "[FAIL] Redis protected-mode is enabled (or defaulting to on)."
+    echo "       Remote clients without a password will be rejected."
+    echo "       Fix: Add 'protected-mode no' to pipeline.conf, or set a requirepass."
+    FAIL_COUNT=$((FAIL_COUNT + 1))
+fi
+
 echo ""
 
 # ---- PostgreSQL ----
