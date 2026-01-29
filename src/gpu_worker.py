@@ -73,17 +73,22 @@ class GPUWorker:
             self.policy_template = f.read()
 
         # Initialize WhisperX
-        # PyTorch 2.6 changed torch.load default to weights_only=True.
-        # Pyannote's VAD checkpoint uses omegaconf types that aren't allowlisted by default.
-        from omegaconf import DictConfig, ListConfig, OmegaConf
-        torch.serialization.add_safe_globals([ListConfig, DictConfig])
-
-        logger.info(f"Loading WhisperX {PROCESSING['WHISPERX_MODEL']}...")
-        self.whisper_model = whisperx.load_model(
-            PROCESSING["WHISPERX_MODEL"],
-            self.device,
-            compute_type="float16" if self.device == "cuda" else "int8"
+        # PyTorch 2.6+ defaults torch.load to weights_only=True, but pyannote's
+        # VAD checkpoint contains omegaconf types not in the safe allowlist.
+        # Temporarily patch torch.load to use weights_only=False for this load only.
+        _original_torch_load = torch.load
+        torch.load = lambda *args, **kwargs: _original_torch_load(
+            *args, **{**kwargs, "weights_only": False}
         )
+        try:
+            logger.info(f"Loading WhisperX {PROCESSING['WHISPERX_MODEL']}...")
+            self.whisper_model = whisperx.load_model(
+                PROCESSING["WHISPERX_MODEL"],
+                self.device,
+                compute_type="float16" if self.device == "cuda" else "int8"
+            )
+        finally:
+            torch.load = _original_torch_load
 
         # Log VRAM after WhisperX
         if self.device == "cuda":
