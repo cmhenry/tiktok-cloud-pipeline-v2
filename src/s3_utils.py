@@ -271,11 +271,13 @@ def check_s3_connection() -> bool:
         endpoint = S3["ENDPOINT"]
 
         logger.debug(f"Testing S3: endpoint={endpoint}, bucket={bucket}")
-        # Use list_objects (v1) instead of head_bucket for radosgw compatibility.
-        # head_bucket requires ListBucket permission that radosgw EC2 credentials
-        # may not have, and list_objects_v2 may fail with SignatureDoesNotMatch
-        # on radosgw when using S3 v2 signatures.
-        client.list_objects(Bucket=bucket, MaxKeys=1)
+        # Use put_object + delete_object for radosgw compatibility.
+        # head_bucket requires permissions radosgw EC2 credentials may lack,
+        # and list operations can fail with SignatureDoesNotMatch on radosgw
+        # with S3 v2 signatures. put_object is known to work reliably.
+        test_key = "_connectivity_check"
+        client.put_object(Bucket=bucket, Key=test_key, Body=b"ok")
+        client.delete_object(Bucket=bucket, Key=test_key)
         logger.info(f"S3 connection verified: bucket '{bucket}' accessible")
         return True
     except ClientError as e:
