@@ -24,11 +24,21 @@ MULTIPART_THRESHOLD = 100 * 1024 * 1024
 _s3_client = None
 
 
+def _validate_s3_config():
+    """Validate required S3 configuration is present."""
+    if not S3["ENDPOINT"]:
+        raise ValueError("S3_ENDPOINT environment variable not set")
+    if not S3["ACCESS_KEY"]:
+        raise ValueError("S3_ACCESS_KEY environment variable not set")
+    if not S3["SECRET_KEY"]:
+        raise ValueError("S3_SECRET_KEY environment variable not set")
+
+
 def get_s3_client():
     """
     Get S3 client configured for OpenStack Swift/S3-compatible endpoint.
 
-    Uses S3 signature v2 for better compatibility with radosgw/Swift.
+    Uses S3 signature v4 for all operations.
     Client is cached for reuse across calls.
 
     Returns:
@@ -42,13 +52,7 @@ def get_s3_client():
     if _s3_client is not None:
         return _s3_client
 
-    # Validate required config
-    if not S3["ENDPOINT"]:
-        raise ValueError("S3_ENDPOINT environment variable not set")
-    if not S3["ACCESS_KEY"]:
-        raise ValueError("S3_ACCESS_KEY environment variable not set")
-    if not S3["SECRET_KEY"]:
-        raise ValueError("S3_SECRET_KEY environment variable not set")
+    _validate_s3_config()
 
     _s3_client = boto3.client(
         "s3",
@@ -57,15 +61,13 @@ def get_s3_client():
         aws_secret_access_key=S3["SECRET_KEY"],
         config=BotoConfig(
             signature_version="s3v4",
-            s3={
-                "addressing_style": "path",
-                "payload_signing_enabled": False,
-            },
+            s3={"addressing_style": "path"},
         ),
     )
 
     logger.debug(f"S3 client initialized for endpoint: {S3['ENDPOINT']}")
     return _s3_client
+
 
 
 def upload_archive(local_path: Path, batch_id: str) -> str:
@@ -103,9 +105,8 @@ def upload_archive(local_path: Path, batch_id: str) -> str:
         # Use multipart upload for large files
         _multipart_upload(client, local_path, s3_key, file_size)
     else:
-        # Simple upload using put_object (better Swift/radosgw compatibility)
-        with open(local_path, "rb") as f:
-            client.put_object(Bucket=S3["BUCKET"], Key=s3_key, Body=f)
+        # Simple upload using upload_file (handles v4 streaming/hashing correctly)
+        client.upload_file(str(local_path), S3["BUCKET"], s3_key)
 
     logger.info(f"Upload complete: {s3_key}")
     return s3_key
@@ -210,9 +211,7 @@ def upload_opus(local_path: Path, audio_id: int, date_str: str) -> str:
 
     logger.debug(f"Uploading opus {audio_id} to s3://{S3['BUCKET']}/{s3_key}")
 
-    # Use put_object for Swift/radosgw compatibility
-    with open(local_path, "rb") as f:
-        client.put_object(Bucket=S3["BUCKET"], Key=s3_key, Body=f)
+    client.upload_file(str(local_path), S3["BUCKET"], s3_key)
 
     return s3_key
 
@@ -274,8 +273,6 @@ def check_s3_connection() -> bool:
         endpoint = S3["ENDPOINT"]
 
         logger.debug(f"Testing S3: endpoint={endpoint}, bucket={bucket}")
-        # Use list_objects_v2 instead of head_bucket for radosgw compatibility.
-        # head_bucket requires permissions radosgw EC2 credentials may lack.
         client.list_objects_v2(Bucket=bucket, MaxKeys=1)
         logger.info(f"S3 connection verified: bucket '{bucket}' accessible")
         return True
