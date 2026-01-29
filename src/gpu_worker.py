@@ -73,6 +73,11 @@ class GPUWorker:
             self.policy_template = f.read()
 
         # Initialize WhisperX
+        # PyTorch 2.6 changed torch.load default to weights_only=True.
+        # Pyannote's VAD checkpoint uses omegaconf types that aren't allowlisted by default.
+        from omegaconf import DictConfig, ListConfig, OmegaConf
+        torch.serialization.add_safe_globals([ListConfig, DictConfig])
+
         logger.info(f"Loading WhisperX {PROCESSING['WHISPERX_MODEL']}...")
         self.whisper_model = whisperx.load_model(
             PROCESSING["WHISPERX_MODEL"],
