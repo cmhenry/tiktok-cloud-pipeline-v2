@@ -77,7 +77,7 @@ S3 = {
     "ENDPOINT": os.getenv("S3_ENDPOINT"),
     "ACCESS_KEY": os.getenv("S3_ACCESS_KEY"),
     "SECRET_KEY": os.getenv("S3_SECRET_KEY"),
-    "BUCKET": os.getenv("S3_BUCKET", "audio-pipeline"),
+    "BUCKET": os.getenv("S3_BUCKET", "audio_pipeline"),
     "ARCHIVE_PREFIX": "archives/",
     "PROCESSED_PREFIX": "processed/",
 }

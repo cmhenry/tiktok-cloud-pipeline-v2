@@ -16,7 +16,7 @@ set -e
 # =============================================================================
 
 # Coordinator services (Redis/Postgres host)
-COORDINATOR_IP="${COORDINATOR_IP:-10.0.0.1}"
+COORDINATOR_IP="${COORDINATOR_IP:-172.23.207.33}"
 
 # Redis
 REDIS_HOST="${REDIS_HOST:-$COORDINATOR_IP}"
@@ -33,7 +33,7 @@ POSTGRES_PASSWORD="${POSTGRES_PASSWORD:-transcript_pass}"
 S3_ENDPOINT="${S3_ENDPOINT:-}"
 S3_ACCESS_KEY="${S3_ACCESS_KEY:-}"
 S3_SECRET_KEY="${S3_SECRET_KEY:-}"
-S3_BUCKET="${S3_BUCKET:-audio-pipeline}"
+S3_BUCKET="${S3_BUCKET:-audio_pipeline}"
 
 # Processing settings
 GPU_BATCH_SIZE="${GPU_BATCH_SIZE:-32}"
@@ -71,16 +71,22 @@ if [[ ! -f "/opt/pipeline/requirements.txt" ]]; then
 fi
 
 # =============================================================================
-# 2. SYSTEM PACKAGES
+# 2. UPDATE CODE
 # =============================================================================
-echo "[1/11] Installing system packages..."
+echo "[1/12] Updating code at /opt/pipeline..."
+git -C /opt/pipeline pull || echo "  WARNING: git pull failed (offline or detached HEAD)"
+
+# =============================================================================
+# 3. SYSTEM PACKAGES
+# =============================================================================
+echo "[2/12] Installing system packages..."
 apt-get update -qq
 apt-get install -y -qq python3-venv python3-pip ffmpeg git
 
 # =============================================================================
 # 3. GPU DRIVER CHECK
 # =============================================================================
-echo "[2/11] Checking GPU setup..."
+echo "[3/12] Checking GPU setup..."
 
 if lspci | grep -qi nvidia; then
     echo "  NVIDIA GPU detected"
@@ -107,7 +113,7 @@ fi
 # =============================================================================
 # 4. MOUNT CINDER VOLUME /dev/sdb -> /data
 # =============================================================================
-echo "[3/11] Setting up Cinder volume..."
+echo "[4/12] Setting up Cinder volume..."
 
 # Check if /dev/sdb exists
 if [[ ! -b /dev/sdb ]]; then
@@ -144,7 +150,7 @@ fi
 # =============================================================================
 # 5. CREATE DIRECTORY STRUCTURE AND SYMLINKS
 # =============================================================================
-echo "[4/11] Creating directory structure..."
+echo "[5/12] Creating directory structure..."
 
 # Local storage directories (on Cinder volume)
 mkdir -p /data/scratch
@@ -178,7 +184,7 @@ echo "    /mnt/data          - Shared volume mount point"
 # =============================================================================
 # 6. PYTHON VIRTUAL ENVIRONMENT
 # =============================================================================
-echo "[5/11] Setting up Python environment..."
+echo "[6/12] Setting up Python environment..."
 
 python3 -m venv /opt/pipeline/venv
 source /opt/pipeline/venv/bin/activate
@@ -195,7 +201,7 @@ echo "  Python environment ready at /opt/pipeline/venv"
 # =============================================================================
 # 7. GENERATE .env FILE
 # =============================================================================
-echo "[6/11] Generating .env file..."
+echo "[7/12] Generating .env file..."
 
 cat > /opt/pipeline/.env <<EOF
 # GPU Worker Configuration
@@ -241,7 +247,7 @@ echo "  Created /opt/pipeline/.env"
 # =============================================================================
 # 8. CREATE SYSTEMD SERVICE FILES
 # =============================================================================
-echo "[7/11] Creating systemd services..."
+echo "[8/12] Creating systemd services..."
 
 # GPU Worker Service
 cat > /etc/systemd/system/gpu-worker.service <<EOF
@@ -304,7 +310,7 @@ echo "  Reloaded systemd"
 # =============================================================================
 # 9. SCRATCH CLEANUP CRON JOB
 # =============================================================================
-echo "[8/11] Setting up scratch cleanup cron..."
+echo "[9/12] Setting up scratch cleanup cron..."
 
 # Cleanup files older than 24 hours in scratch directory
 CRON_FILE="/etc/cron.d/pipeline-scratch-cleanup"
@@ -323,7 +329,7 @@ echo "  Added cron job to clean scratch files older than 24h"
 # =============================================================================
 # 10. SET OWNERSHIP
 # =============================================================================
-echo "[9/11] Setting file ownership..."
+echo "[10/12] Setting file ownership..."
 
 chown -R ubuntu:ubuntu /opt/pipeline
 chown -R ubuntu:ubuntu /data 2>/dev/null || true
@@ -332,7 +338,7 @@ chown -R ubuntu:ubuntu /mnt/data 2>/dev/null || true
 # =============================================================================
 # 11. VERIFICATION
 # =============================================================================
-echo "[10/11] Verifying setup..."
+echo "[11/12] Verifying setup..."
 echo ""
 
 ERRORS=0
@@ -389,7 +395,7 @@ fi
 # =============================================================================
 # 12. CONNECTIVITY CHECK
 # =============================================================================
-echo "[11/11] Testing service connectivity..."
+echo "[12/12] Testing service connectivity..."
 echo ""
 
 CONN_ERRORS=0

@@ -21,7 +21,7 @@ echo "[2/6] Configuring Redis..."
 
 # Backup original config
 cp /etc/redis/redis.conf /etc/redis/redis.conf.backup
-mkdir /etc/redis/redis.conf.d/
+mkdir -p /etc/redis/redis.conf.d
 
 # Configure Redis for network access
 cat > /etc/redis/redis.conf.d/pipeline.conf <<EOF
@@ -32,9 +32,6 @@ maxmemory-policy allkeys-lru
 # Optional: require password
 # requirepass your_redis_password
 EOF
-
-# Create conf.d directory if it doesn't exist
-mkdir -p /etc/redis/redis.conf.d
 
 # Add include directive to main config if not present
 if ! grep -q "include /etc/redis/redis.conf.d" /etc/redis/redis.conf; then
