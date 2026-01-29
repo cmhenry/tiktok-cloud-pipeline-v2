@@ -69,6 +69,33 @@ def get_s3_client():
     return _s3_client
 
 
+_s3_list_client = None
+
+
+def get_s3_list_client():
+    """S3 client with v4 signatures for listing operations.
+
+    The primary client uses v2 signatures (required for uploads on Ceph RGW),
+    but listing operations fail with SignatureDoesNotMatch under v2.
+    v4 signatures work for listing since GET requests have no body to hash.
+    """
+    global _s3_list_client
+    if _s3_list_client is not None:
+        return _s3_list_client
+
+    _validate_s3_config()
+    _s3_list_client = boto3.client(
+        "s3",
+        endpoint_url=S3["ENDPOINT"],
+        aws_access_key_id=S3["ACCESS_KEY"],
+        aws_secret_access_key=S3["SECRET_KEY"],
+        config=BotoConfig(
+            signature_version="s3v4",
+            s3={"addressing_style": "path"},
+        ),
+    )
+    return _s3_list_client
+
 
 def upload_archive(local_path: Path, batch_id: str) -> str:
     """
@@ -273,7 +300,9 @@ def check_s3_connection() -> bool:
         endpoint = S3["ENDPOINT"]
 
         logger.debug(f"Testing S3: endpoint={endpoint}, bucket={bucket}")
-        client.list_objects(Bucket=bucket, MaxKeys=1)
+        test_key = "_connectivity_test"
+        client.put_object(Bucket=bucket, Key=test_key, Body=b"ok")
+        client.delete_object(Bucket=bucket, Key=test_key)
         logger.info(f"S3 connection verified: bucket '{bucket}' accessible")
         return True
     except ClientError as e:

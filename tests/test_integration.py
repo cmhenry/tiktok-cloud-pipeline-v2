@@ -325,12 +325,12 @@ class IntegrationTest:
 
             # Verify S3 processed files
             self.log("Checking S3 for processed files...")
-            from src.s3_utils import get_s3_client
+            from src.s3_utils import get_s3_list_client
 
-            client = get_s3_client()
+            list_client = get_s3_list_client()
 
             # List objects in processed/ prefix
-            response = client.list_objects(
+            response = list_client.list_objects(
                 Bucket=S3["BUCKET"],
                 Prefix=S3["PROCESSED_PREFIX"],
                 MaxKeys=100,
@@ -424,10 +424,13 @@ class IntegrationTest:
             self.log(f"  Failed to delete S3 archive: {e}", "WARN")
 
         # Clean S3 processed files
+        from src.s3_utils import get_s3_list_client
+
+        list_client = get_s3_list_client()
         for audio_id in self.created_audio_ids:
             try:
                 # Find and delete processed opus files
-                response = client.list_objects(
+                response = list_client.list_objects(
                     Bucket=S3["BUCKET"],
                     Prefix=f"{S3['PROCESSED_PREFIX']}",
                     MaxKeys=1000,
