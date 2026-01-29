@@ -57,14 +57,15 @@ EOF
 PG_VERSION=$(ls /etc/postgresql/)
 PG_HBA="/etc/postgresql/${PG_VERSION}/main/pg_hba.conf"
 
-# Add line for internal network (adjust 10.0.0.0/24 to your subnet)
-if ! grep -q "10.0.0.0/24" "$PG_HBA"; then
-    echo "host    transcript_db   transcript_user    10.0.0.0/24    md5" >> "$PG_HBA"
+# Add line for internal network (override with WORKER_SUBNET env var if needed)
+WORKER_SUBNET="${WORKER_SUBNET:-172.23.0.0/16}"
+if ! grep -q "transcript_user" "$PG_HBA"; then
+    echo "host    transcript_db   transcript_user    ${WORKER_SUBNET}    scram-sha-256" >> "$PG_HBA"
 fi
 
 # Listen on all interfaces
 PG_CONF="/etc/postgresql/${PG_VERSION}/main/postgresql.conf"
-sed -i "s/#listen_addresses = 'localhost'/listen_addresses = '*'/" "$PG_CONF"
+sed -i "s/^#*\s*listen_addresses\s*=.*/listen_addresses = '*'/" "$PG_CONF"
 
 systemctl restart postgresql
 systemctl enable postgresql

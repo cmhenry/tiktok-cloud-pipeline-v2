@@ -37,6 +37,28 @@ class ConnectivityTester:
         prefix = {"INFO": "[*]", "OK": "[+]", "FAIL": "[-]", "WARN": "[!]"}
         print(f"{prefix.get(level, '[*]')} {msg}")
 
+    def _print_hints(self, service: str, error_str: str):
+        """Print targeted troubleshooting hints based on the error message."""
+        err = error_str.lower()
+        if "connection refused" in err:
+            self.log(
+                f"{service} may not be listening on the network interface. "
+                "Run `sudo ./deploy/diagnose-services.sh` on the coordinator.",
+                "WARN",
+            )
+        if "pg_hba.conf" in err:
+            self.log(
+                "PostgreSQL is rejecting this worker's IP. Check pg_hba.conf on "
+                "the coordinator or re-run `sudo ./deploy/setup-coordinator.sh`.",
+                "WARN",
+            )
+        if "timeout" in err or "timed out" in err:
+            self.log(
+                f"Firewall or routing issue reaching {service}. Verify the "
+                "coordinator IP and that the port is open.",
+                "WARN",
+            )
+
     def print_config(self):
         """Print resolved configuration so the user can spot misconfigurations."""
         def _mask(value):
@@ -112,10 +134,12 @@ class ConnectivityTester:
 
         except redis.ConnectionError as e:
             self.log(f"Redis connection failed: {e}", "FAIL")
+            self._print_hints("Redis", str(e))
             self.results["redis"] = False
             return False
         except Exception as e:
             self.log(f"Redis test error: {e}", "FAIL")
+            self._print_hints("Redis", str(e))
             self.results["redis"] = False
             return False
 
@@ -193,10 +217,12 @@ class ConnectivityTester:
 
         except psycopg2.OperationalError as e:
             self.log(f"PostgreSQL connection failed: {e}", "FAIL")
+            self._print_hints("PostgreSQL", str(e))
             self.results["postgres"] = False
             return False
         except Exception as e:
             self.log(f"PostgreSQL test error: {e}", "FAIL")
+            self._print_hints("PostgreSQL", str(e))
             self.results["postgres"] = False
             return False
 
