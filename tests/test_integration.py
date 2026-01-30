@@ -18,7 +18,8 @@ With --with-transfer, tests from the transfer stage using real files on AWS EC2:
 3. Transfers the file via SCP to local staging
 4. Uploads to S3
 5. Pushes job to Redis unpack queue
-6. Monitors and verifies through unpack stage (no GPU)
+6. Monitors and verifies through unpack stage
+7. (Unless --skip-gpu-verify) Waits for GPU processing and verifies DB + S3 results
 
 Prerequisites:
 - ffmpeg installed (for generating test audio)
@@ -75,7 +76,7 @@ class IntegrationTest:
         self.audio_duration = audio_duration
         self.with_transfer = with_transfer
         self.source_file = source_file
-        self.skip_gpu_verify = skip_gpu_verify or with_transfer
+        self.skip_gpu_verify = skip_gpu_verify
         self.dry_run = dry_run
 
         self.batch_id = f"test_{uuid.uuid4().hex[:8]}"
@@ -335,6 +336,7 @@ class IntegrationTest:
 
             if total is not None:
                 results["redis_batch_total"] = True
+                results["batch_total"] = int(total)
                 self.log(f"  Redis batch:total = {total}", "OK")
             else:
                 self.log("  Redis batch:total not set", "FAIL")
@@ -804,7 +806,10 @@ class IntegrationTest:
         Returns:
             True if all tests passed, False otherwise
         """
-        mode = "Transfer + Unpack" if self.with_transfer else "Full Pipeline"
+        if self.with_transfer:
+            mode = "Transfer + Unpack" if self.skip_gpu_verify else "Transfer + Full Pipeline"
+        else:
+            mode = "Full Pipeline"
         dry_run_tag = " [DRY RUN]" if self.dry_run else ""
         self.log("=" * 60)
         self.log(f"{mode} Integration Test{dry_run_tag}")
@@ -871,7 +876,32 @@ class IntegrationTest:
             return False
 
         # Phase 7: Verify unpack results
-        results = self.verify_unpack_results()
+        unpack_results = self.verify_unpack_results()
+        print()
+
+        if not unpack_results["success"]:
+            self.log("Unpack verification failed, stopping", "FAIL")
+            return False
+
+        # Update num_files from actual batch total for accurate verification
+        total_raw = unpack_results.get("batch_total")
+        if total_raw:
+            self.num_files = int(total_raw)
+
+        if self.skip_gpu_verify:
+            return True
+
+        # Phase 8: Wait for GPU processing to complete
+        self.log("Waiting for GPU worker to process all files...")
+        gpu_completed = self.wait_for_completion()
+        print()
+
+        if not gpu_completed:
+            self.log("Test FAILED: timeout waiting for GPU completion", "FAIL")
+            return False
+
+        # Phase 9: Verify full results (DB + S3)
+        results = self.verify_results()
         print()
 
         return results["success"]
@@ -890,6 +920,8 @@ class IntegrationTest:
         self.log(f"  3. Push unpack job to Redis queue '{REDIS['QUEUES']['UNPACK']}' with batch_id={self.batch_id}")
         self.log(f"  4. Wait up to {self.timeout}s for unpack worker to process the archive")
         self.log(f"  5. Verify: S3 archive exists, Redis batch keys set, transcribe queue populated, opus files in scratch")
+        gpu_verify_str = "SKIPPED (--skip-gpu-verify)" if self.skip_gpu_verify else "ENABLED"
+        self.log(f"  GPU verification: {gpu_verify_str}")
         if not self.keep_data:
             self.log("  6. Cleanup: delete S3 archive, Redis keys, staging dir, scratch dir")
         else:
@@ -947,7 +979,7 @@ def main():
         "--timeout",
         type=int,
         default=300,
-        help="Timeout in seconds (default: 300)",
+        help="Timeout in seconds (default: 300). Use 900+ for full GPU pipeline with real archives.",
     )
     parser.add_argument(
         "--keep-data",
