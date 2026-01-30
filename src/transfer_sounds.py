@@ -22,7 +22,7 @@ from filelock import FileLock
 import redis
 
 from .config import AWS, TRANSFER_LOCKS, REDIS, LOGGING
-from .s3_utils import upload_archive
+from .s3_utils import upload_archive, get_archive_size
 
 ### Utils ###
 
@@ -300,8 +300,13 @@ def remove_file(path, remote_host = None, logger = None):
             print(msg)
         return False
 
-def transfer_sound_zrh(source_path, dest_path, source_host = None, secure = True, logger = None, remove = True):
-    """Transfer a file from AWS to local via rclone SFTP (using SSH config)."""
+def transfer_sound_zrh(source_path, dest_path, source_host = None, secure = True, logger = None):
+    """Transfer a file from AWS to local via rclone SFTP (using SSH config).
+
+    Pure copy-and-verify: rclone copies the file, then (if secure=True)
+    checks that source and destination sizes match.  Deletion of the
+    remote source is handled by the caller after the full pipeline
+    (S3 upload + size verification) succeeds."""
 
     start_time = time.time()
     file_path = os.path.basename(source_path)
@@ -400,18 +405,6 @@ def transfer_sound_zrh(source_path, dest_path, source_host = None, secure = True
                 size_msg = f"{dest_size/1024/1024:.1f} Mb "
             else: 
                 size_msg = ""
-            
-            if remove: 
-                try: 
-                    remove_file(
-                        source_path, 
-                        source_host, 
-                        logger = logger
-                    )
-                except Exception as e: 
-                    log_message(f"{log_first_part}\tError during deletion\t{e}", logger, level="error")
-                    remove_lock_file(lock_path)
-                    return False
             
             duration = time.time() - start_time
             
@@ -559,19 +552,20 @@ def main():
                     size_str = f"{file_size/1024/1024:.1f} MB" if file_size else "unknown size"
                     log_message(f"\t[DRY RUN] Would transfer: {filename} ({size_str})", logger)
                     log_message(f"\t[DRY RUN] Would upload to S3 and queue batch for unpacking", logger)
+                    delete_status = "ENABLED" if AWS.get("DELETE_AFTER", False) else "DISABLED"
+                    log_message(f"\t[DRY RUN] DELETE_AFTER is {delete_status}", logger)
                     files_copied += 1
                     continue
 
                 if file_exists(source_file, AWS_CONTENT_VM_HOST):
                     # 2. Transfer file directly from AWS to local staging
+                    # Deletion of the EC2 source happens later, after S3 upload is verified
                     transfer_result = transfer_sound_zrh(
                         source_path=source_file,
                         dest_path=TEMP_STAGING_DIR,
                         source_host=AWS_CONTENT_VM_HOST,
                         logger=logger,
                         secure=True,
-                        # TODO: once this is ready set this to true to remove the file from EC2
-                        remove=False
                     )
                 else:
                     transfer_result = False
@@ -589,6 +583,28 @@ def main():
                     # 3. Upload to S3
                     log_message(f"\t\tUploading to S3: {filename} as batch {batch_id}", logger)
                     s3_key = upload_archive(local_archive_path, batch_id)
+
+                    # Verify S3 upload by comparing sizes
+                    s3_size = get_archive_size(s3_key)
+                    local_size = local_archive_path.stat().st_size
+                    if s3_size != local_size:
+                        log_message(
+                            f"\t\tS3 size mismatch for {filename}: local={local_size}, s3={s3_size}",
+                            logger, level="error",
+                        )
+                        files_skipped += 1
+                        continue
+
+                    # Safe to delete source from EC2 — transfer verified, S3 upload verified
+                    if AWS.get("DELETE_AFTER", False):
+                        rm_result = remove_file(source_file, AWS_CONTENT_VM_HOST, logger=logger)
+                        if rm_result is False:
+                            log_message(
+                                f"\t\tFailed to delete source after verified transfer: {source_file}",
+                                logger, level="warning",
+                            )
+                        else:
+                            log_message(f"\t\tDeleted source from EC2: {filename}", logger)
 
                     # 4. Queue for unpacking pipeline with new JSON format
                     if redis_client:

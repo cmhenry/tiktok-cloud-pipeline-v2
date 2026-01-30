@@ -243,8 +243,6 @@ class IntegrationTest:
         """
         Transfer a file from tt-zrh to local staging via SCP.
 
-        Uses transfer_sound_zrh() with remove=False to preserve the source.
-
         Args:
             source_path: Full path to the file on the remote host.
 
@@ -273,7 +271,6 @@ class IntegrationTest:
             source_host=AWS["HOST"],
             secure=True,
             logger=logger,
-            remove=False,
         )
 
         if not result:
