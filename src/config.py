@@ -57,7 +57,7 @@ POSTGRES = {
 # AWS transfer settings
 AWS = {
     "HOST": "tt-zrh",                              # SSH config alias
-    "SOURCE_DIR": "/mnt/hub/export/sound",
+    "SOURCE_DIR": "/mnt/hub/export/sound_buffer",
     "SSH_CONFIG_FILE": Path.home() / ".ssh" / "config",
     "FILE_LATENCY_MIN": 10,                        # Only grab files >10 min old
     "TRANSFER_BATCH": 50,                          # Max files per cycle
