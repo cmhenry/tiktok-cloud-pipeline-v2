@@ -63,7 +63,7 @@ AWS = {
     "TRANSFER_BATCH": 50,                          # Max files per cycle
     "POLL_INTERVAL": 60,                           # Seconds between polls
     "SECURE_TRANSFER": True,                       # Verify file sizes
-    "DELETE_AFTER": False,                         # Flip True once validated
+    "DELETE_AFTER": True,                          # Delete source from EC2 after verified S3 upload
 }
 
 # Transfer lock settings

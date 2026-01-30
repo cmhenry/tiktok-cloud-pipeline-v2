@@ -1,0 +1,66 @@
+19:48:58.420   1000530 	inf		Sound 6 found
+19:49:01.178   1000530 	inf			tt-aws to zrh	transfer_staging	76716_2026-01-30_17_30.tar		81.5 Mb
+19:49:09.479   1000530 	inf			tt-aws to zrh	transfer_staging	76716_2026-01-30_17_30.tar		81.5 Mb 		Sucess:  81.5 Mb in 9.68 secs
+19:49:09.480   1000530 	inf			Uploading to S3: 76716_2026-01-30_17_30.tar as batch 20260130-194909-5276e5
+19:49:10.475   1000530 	inf			Queued for unpacking: 20260130-194909-5276e5 (s3://archives/20260130-194909-5276e5.tar)
+19:49:10.522   1000530 	deb			Cleaned up local staging file: 76716_2026-01-30_17_30.tar
+19:49:13.279   1000530 	inf			tt-aws to zrh	transfer_staging	76728_2026-01-30_17_30.tar		279.3 Mb
+19:49:26.813   1000530 	inf			tt-aws to zrh	transfer_staging	76728_2026-01-30_17_30.tar		279.3 Mb 		Sucess:  279.3 Mb in 14.91 secs
+19:49:26.813   1000530 	inf			Uploading to S3: 76728_2026-01-30_17_30.tar as batch 20260130-194926-d090b7
+19:49:28.560   1000530 	inf			Queued for unpacking: 20260130-194926-d090b7 (s3://archives/20260130-194926-d090b7.tar)
+19:49:28.647   1000530 	deb			Cleaned up local staging file: 76728_2026-01-30_17_30.tar
+19:49:31.353   1000530 	inf			tt-aws to zrh	transfer_staging	76720_2026-01-30_17_30.tar		124.9 Mb
+19:49:41.966   1000530 	inf			tt-aws to zrh	transfer_staging	76720_2026-01-30_17_30.tar		124.9 Mb 		Sucess:  124.9 Mb in 11.96 secs
+19:49:41.966   1000530 	inf			Uploading to S3: 76720_2026-01-30_17_30.tar as batch 20260130-194941-a28c7b
+19:49:43.059   1000530 	inf			Queued for unpacking: 20260130-194941-a28c7b (s3://archives/20260130-194941-a28c7b.tar)
+19:49:43.122   1000530 	deb			Cleaned up local staging file: 76720_2026-01-30_17_30.tar
+19:49:45.814   1000530 	inf			tt-aws to zrh	transfer_staging	76725_2026-01-30_17_30.tar		110.6 Mb
+19:49:55.606   1000530 	inf			tt-aws to zrh	transfer_staging	76725_2026-01-30_17_30.tar		110.6 Mb 		Sucess:  110.6 Mb in 11.14 secs
+19:49:55.606   1000530 	inf			Uploading to S3: 76725_2026-01-30_17_30.tar as batch 20260130-194955-a244b4
+19:49:56.951   1000530 	inf			Queued for unpacking: 20260130-194955-a244b4 (s3://archives/20260130-194955-a244b4.tar)
+19:49:57.009   1000530 	deb			Cleaned up local staging file: 76725_2026-01-30_17_30.tar
+19:49:59.774   1000530 	inf			tt-aws to zrh	transfer_staging	76742_2026-01-30_17_30.tar		122.3 Mb
+19:50:10.333   1000530 	inf			tt-aws to zrh	transfer_staging	76742_2026-01-30_17_30.tar		122.3 Mb 		Sucess:  122.3 Mb in 11.94 secs
+19:50:10.333   1000530 	inf			Uploading to S3: 76742_2026-01-30_17_30.tar as batch 20260130-195010-9a1a92
+19:50:11.391   1000530 	inf			Queued for unpacking: 20260130-195010-9a1a92 (s3://archives/20260130-195010-9a1a92.tar)
+19:50:11.454   1000530 	deb			Cleaned up local staging file: 76742_2026-01-30_17_30.tar
+19:50:14.205   1000530 	inf			tt-aws to zrh	transfer_staging	76735_2026-01-30_17_30.tar		99.0 Mb
+19:50:23.439   1000530 	inf			tt-aws to zrh	transfer_staging	76735_2026-01-30_17_30.tar		99.0 Mb 		Sucess:  99.0 Mb in 10.60 secs
+19:50:23.439   1000530 	inf			Uploading to S3: 76735_2026-01-30_17_30.tar as batch 20260130-195023-3acec0
+19:50:24.615   1000530 	inf			Queued for unpacking: 20260130-195023-3acec0 (s3://archives/20260130-195023-3acec0.tar)
+19:50:24.668   1000530 	deb			Cleaned up local staging file: 76735_2026-01-30_17_30.tar
+19:50:24.668   1000530 	inf			Complete for Sound	6 + 0	 in 87.64 secs
+
+
+19:51:26.037   1000530 	inf		Sound 6 found
+19:51:28.757   1000530 	inf			tt-aws to zrh	transfer_staging	76716_2026-01-30_17_30.tar		81.5 Mb
+19:51:36.987   1000530 	inf			tt-aws to zrh	transfer_staging	76716_2026-01-30_17_30.tar		81.5 Mb 		Sucess:  81.5 Mb in 9.58 secs
+19:51:36.987   1000530 	inf			Uploading to S3: 76716_2026-01-30_17_30.tar as batch 20260130-195136-eb0813
+19:51:37.907   1000530 	inf			Queued for unpacking: 20260130-195136-eb0813 (s3://archives/20260130-195136-eb0813.tar)
+19:51:37.952   1000530 	deb			Cleaned up local staging file: 76716_2026-01-30_17_30.tar
+19:51:40.696   1000530 	inf			tt-aws to zrh	transfer_staging	76728_2026-01-30_17_30.tar		279.3 Mb
+19:51:53.779   1000530 	inf			tt-aws to zrh	transfer_staging	76728_2026-01-30_17_30.tar		279.3 Mb 		Sucess:  279.3 Mb in 14.45 secs
+19:51:53.779   1000530 	inf			Uploading to S3: 76728_2026-01-30_17_30.tar as batch 20260130-195153-ca8378
+19:51:55.466   1000530 	inf			Queued for unpacking: 20260130-195153-ca8378 (s3://archives/20260130-195153-ca8378.tar)
+19:51:55.549   1000530 	deb			Cleaned up local staging file: 76728_2026-01-30_17_30.tar
+19:51:58.273   1000530 	inf			tt-aws to zrh	transfer_staging	76720_2026-01-30_17_30.tar		124.9 Mb
+19:52:08.819   1000530 	inf			tt-aws to zrh	transfer_staging	76720_2026-01-30_17_30.tar		124.9 Mb 		Sucess:  124.9 Mb in 11.90 secs
+19:52:08.820   1000530 	inf			Uploading to S3: 76720_2026-01-30_17_30.tar as batch 20260130-195208-d3ad06
+19:52:09.826   1000530 	inf			Queued for unpacking: 20260130-195208-d3ad06 (s3://archives/20260130-195208-d3ad06.tar)
+19:52:09.889   1000530 	deb			Cleaned up local staging file: 76720_2026-01-30_17_30.tar
+19:52:12.625   1000530 	inf			tt-aws to zrh	transfer_staging	76725_2026-01-30_17_30.tar		110.6 Mb
+19:52:22.560   1000530 	inf			tt-aws to zrh	transfer_staging	76725_2026-01-30_17_30.tar		110.6 Mb 		Sucess:  110.6 Mb in 11.29 secs
+19:52:22.560   1000530 	inf			Uploading to S3: 76725_2026-01-30_17_30.tar as batch 20260130-195222-3cc0e6
+19:52:23.498   1000530 	inf			Queued for unpacking: 20260130-195222-3cc0e6 (s3://archives/20260130-195222-3cc0e6.tar)
+19:52:23.556   1000530 	deb			Cleaned up local staging file: 76725_2026-01-30_17_30.tar
+19:52:26.330   1000530 	inf			tt-aws to zrh	transfer_staging	76742_2026-01-30_17_30.tar		122.3 Mb
+19:52:36.732   1000530 	inf			tt-aws to zrh	transfer_staging	76742_2026-01-30_17_30.tar		122.3 Mb 		Sucess:  122.3 Mb in 11.80 secs
+19:52:36.732   1000530 	inf			Uploading to S3: 76742_2026-01-30_17_30.tar as batch 20260130-195236-680ed0
+19:52:37.830   1000530 	inf			Queued for unpacking: 20260130-195236-680ed0 (s3://archives/20260130-195236-680ed0.tar)
+19:52:37.893   1000530 	deb			Cleaned up local staging file: 76742_2026-01-30_17_30.tar
+19:52:40.623   1000530 	inf			tt-aws to zrh	transfer_staging	76735_2026-01-30_17_30.tar		99.0 Mb
+19:52:49.841   1000530 	inf			tt-aws to zrh	transfer_staging	76735_2026-01-30_17_30.tar		99.0 Mb 		Sucess:  99.0 Mb in 10.58 secs
+19:52:49.842   1000530 	inf			Uploading to S3: 76735_2026-01-30_17_30.tar as batch 20260130-195249-510506
+19:52:50.870   1000530 	inf			Queued for unpacking: 20260130-195249-510506 (s3://archives/20260130-195249-510506.tar)
+19:52:50.923   1000530 	deb			Cleaned up local staging file: 76735_2026-01-30_17_30.tar
+19:52:50.923   1000530 	inf			Complete for Sound	6 + 0	 in 86.26 secs

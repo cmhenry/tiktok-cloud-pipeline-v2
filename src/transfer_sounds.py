@@ -447,7 +447,8 @@ def transfer_sound_zrh(source_path, dest_path, source_host = None, secure = True
             log_message(msg, logger)
             # if secure:
             #     send_slack_text_message(msg, webhook = "ttm_0_transfer_zrh")  # Disabled for testing
-            remove_lock_file(lock_path)
+            # Lock intentionally kept — prevents re-download if source
+            # deletion fails.  Lock auto-expires after 60 min for retry.
             return True
         except Exception as e:
             log_message(f"{log_first_part}\tError during transfer to zrh\t{str(e)[:200]}", logger, level="error")
@@ -640,6 +641,9 @@ def main():
                             )
                         else:
                             log_message(f"\t\tDeleted source from EC2: {filename}", logger)
+                            # Source confirmed deleted — safe to remove lock
+                            lock_path = f"{TRANSFER_LOCK_FOLDER}/tt-aws_zrh_{filename.replace('/', '_')}.lock"
+                            remove_lock_file(lock_path)
 
                     # 4. Queue for unpacking pipeline with new JSON format
                     if redis_client:
