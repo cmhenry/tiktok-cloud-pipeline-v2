@@ -357,7 +357,7 @@ def transfer_sound_zrh(source_path, dest_path, source_host = None, secure = True
                 f":sftp:{source_path}",
                 dest_path,
                 "--sftp-host", source_host,
-                "--sftp-ssh", SSH_CONFIG_FILE,
+                "--sftp-ssh", f"ssh -F {SSH_CONFIG_FILE}",
                 "--transfers", "1",
                 "--quiet",
             ]
