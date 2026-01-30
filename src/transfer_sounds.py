@@ -388,7 +388,7 @@ def transfer_sound_zrh(source_path, dest_path, source_host = None, secure = True
                 dest_path,
                 "--sftp-host", ssh_opts.get("HostName", source_host),
                 "--sftp-user", ssh_opts.get("User", "ec2-user"),
-                "--sftp-key-use-agent=false",
+                "--sftp-key-file", os.path.expanduser("~/.ssh/id_ed25519"),
                 "--transfers", "1",
                 "--quiet",
             ]
