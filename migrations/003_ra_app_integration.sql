@@ -263,6 +263,9 @@ BEGIN
         GRANT USAGE, SELECT ON SEQUENCE audio_files_id_seq TO transcript_user;
         GRANT USAGE, SELECT ON SEQUENCE pipeline_transcripts_id_seq TO transcript_user;
         GRANT USAGE, SELECT ON SEQUENCE pipeline_classifications_id_seq TO transcript_user;
+        -- View and function needed by sync_pipeline_to_ra
+        GRANT SELECT ON pipeline_sync_candidates TO transcript_user;
+        GRANT EXECUTE ON FUNCTION sync_pipeline_to_ra(NUMERIC, INTEGER) TO transcript_user;
         RAISE NOTICE 'Granted permissions to transcript_user';
     ELSE
         RAISE NOTICE 'transcript_user role does not exist, skipping grants';
