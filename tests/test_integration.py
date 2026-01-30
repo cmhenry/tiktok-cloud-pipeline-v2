@@ -31,6 +31,7 @@ Usage:
     python -m tests.test_integration --keep-data
     python -m tests.test_integration --timeout 600
     python -m tests.test_integration --with-transfer
+    python -m tests.test_integration --with-transfer --dry-run
     python -m tests.test_integration --with-transfer --source-file /mnt/hub/export/sound_buffer/archive.tar
     python -m tests.test_integration --with-transfer --skip-gpu-verify
 """
@@ -66,6 +67,7 @@ class IntegrationTest:
         with_transfer: bool = False,
         source_file: str = None,
         skip_gpu_verify: bool = False,
+        dry_run: bool = False,
     ):
         self.timeout = timeout
         self.keep_data = keep_data
@@ -74,6 +76,7 @@ class IntegrationTest:
         self.with_transfer = with_transfer
         self.source_file = source_file
         self.skip_gpu_verify = skip_gpu_verify or with_transfer
+        self.dry_run = dry_run
 
         self.batch_id = f"test_{uuid.uuid4().hex[:8]}"
         self.s3_key = f"archives/{self.batch_id}.tar"
@@ -805,13 +808,16 @@ class IntegrationTest:
             True if all tests passed, False otherwise
         """
         mode = "Transfer + Unpack" if self.with_transfer else "Full Pipeline"
+        dry_run_tag = " [DRY RUN]" if self.dry_run else ""
         self.log("=" * 60)
-        self.log(f"{mode} Integration Test")
+        self.log(f"{mode} Integration Test{dry_run_tag}")
         self.log("=" * 60)
         self.log(f"Batch ID: {self.batch_id}")
         if not self.with_transfer:
             self.log(f"Files: {self.num_files}")
         self.log(f"Timeout: {self.timeout}s")
+        if self.dry_run:
+            self.log("Mode: DRY RUN (no data will be transferred, uploaded, or queued)")
         if self.skip_gpu_verify:
             self.log("GPU verification: SKIPPED")
         print()
@@ -844,6 +850,9 @@ class IntegrationTest:
         source_path = self.discover_source_file()
         print()
 
+        if self.dry_run:
+            return self._dry_run_transfer_report(source_path)
+
         # Phase 3: Transfer file from AWS
         local_archive = self.transfer_from_aws(source_path)
         print()
@@ -869,6 +878,28 @@ class IntegrationTest:
         print()
 
         return results["success"]
+
+    def _dry_run_transfer_report(self, source_path: str) -> bool:
+        """Show what the transfer flow would do without executing anything."""
+        from src.transfer_sounds import get_file_size
+
+        filename = os.path.basename(source_path)
+        file_size = get_file_size(source_path, AWS["HOST"])
+        size_str = f"{file_size / 1024 / 1024:.1f} MB" if file_size else "unknown size"
+
+        self.log("[DRY RUN] Would execute the following steps:")
+        self.log(f"  1. Transfer {filename} ({size_str}) from {AWS['HOST']} to local staging")
+        self.log(f"  2. Upload to S3 as s3://{S3['BUCKET']}/{self.s3_key}")
+        self.log(f"  3. Push unpack job to Redis queue '{REDIS['QUEUES']['UNPACK']}' with batch_id={self.batch_id}")
+        self.log(f"  4. Wait up to {self.timeout}s for unpack worker to process the archive")
+        self.log(f"  5. Verify: S3 archive exists, Redis batch keys set, transcribe queue populated, opus files in scratch")
+        if not self.keep_data:
+            self.log("  6. Cleanup: delete S3 archive, Redis keys, staging dir, scratch dir")
+        else:
+            self.log("  6. Cleanup: SKIPPED (--keep-data)")
+        print()
+        self.log("Dry run complete -- no data was modified", "OK")
+        return True
 
     def _run_synthetic_flow(self) -> bool:
         """Run the original synthetic audio integration test flow."""
@@ -954,6 +985,11 @@ def main():
         action="store_true",
         help="Skip DB verification of transcripts/classifications (verify unpack only)",
     )
+    parser.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="Show what would happen without transferring, uploading, or queuing anything",
+    )
 
     args = parser.parse_args()
 
@@ -965,6 +1001,7 @@ def main():
         with_transfer=args.with_transfer,
         source_file=args.source_file,
         skip_gpu_verify=args.skip_gpu_verify,
+        dry_run=args.dry_run,
     )
 
     success = test.run()
