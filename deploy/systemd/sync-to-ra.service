@@ -1,0 +1,13 @@
+[Unit]
+Description=Sync flagged pipeline items to RA App
+After=network.target postgresql.service
+
+[Service]
+Type=oneshot
+User=ubuntu
+WorkingDirectory=/opt/pipeline
+EnvironmentFile=/opt/pipeline/.env
+ExecStart=/opt/pipeline/venv/bin/python -m src.sync_to_ra_app --threshold 0.7 --limit 500
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=sync-to-ra

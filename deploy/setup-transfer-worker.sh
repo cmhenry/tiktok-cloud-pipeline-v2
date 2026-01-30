@@ -142,16 +142,32 @@ echo "  Created /opt/pipeline/.env"
 # =============================================================================
 # 7. INSTALL SYSTEMD SERVICE
 # =============================================================================
-echo "[6/8] Installing systemd service..."
+echo "[6/9] Installing systemd services..."
 
 cp /opt/pipeline/deploy/systemd/transfer-worker.service /etc/systemd/system/
+cp /opt/pipeline/deploy/systemd/sync-to-ra.service /etc/systemd/system/
+cp /opt/pipeline/deploy/systemd/sync-to-ra.timer /etc/systemd/system/
 systemctl daemon-reload
 echo "  Installed transfer-worker.service"
+echo "  Installed sync-to-ra.service + sync-to-ra.timer"
 
 # =============================================================================
-# 8. INSTALL HEALTH CHECK
+# 8. APPLY RA APP MIGRATION
 # =============================================================================
-echo "[7/8] Installing health check script..."
+echo "[7/9] Applying RA App integration migration..."
+
+if PGPASSWORD="$POSTGRES_PASSWORD" psql -U "$POSTGRES_USER" -h "$POSTGRES_HOST" -p "$POSTGRES_PORT" -d "$POSTGRES_DB" \
+    -f /opt/pipeline/migrations/003_ra_app_integration.sql -q 2>/dev/null; then
+    echo "  Applied migrations/003_ra_app_integration.sql"
+else
+    echo "  [WARN] Could not apply 003_ra_app_integration.sql (PostgreSQL may not be reachable)"
+    echo "         Run manually: psql -U $POSTGRES_USER -d $POSTGRES_DB -f /opt/pipeline/migrations/003_ra_app_integration.sql"
+fi
+
+# =============================================================================
+# 9. INSTALL HEALTH CHECK
+# =============================================================================
+echo "[8/9] Installing health check script..."
 
 cp /opt/pipeline/deploy/check-health.sh /opt/pipeline/check-health.sh
 chmod +x /opt/pipeline/check-health.sh
@@ -159,9 +175,9 @@ chown ubuntu:ubuntu /opt/pipeline/check-health.sh
 echo "  Installed check-health.sh"
 
 # =============================================================================
-# 9. VERIFICATION
+# 10. VERIFICATION
 # =============================================================================
-echo "[8/8] Verifying setup..."
+echo "[9/9] Verifying setup..."
 echo ""
 
 ERRORS=0
@@ -187,6 +203,14 @@ if systemctl list-unit-files | grep -q transfer-worker.service; then
     echo "  [OK] transfer-worker.service installed"
 else
     echo "  [FAIL] transfer-worker.service not found"
+    ERRORS=$((ERRORS+1))
+fi
+
+# Check sync timer
+if systemctl list-unit-files | grep -q sync-to-ra.timer; then
+    echo "  [OK] sync-to-ra.timer installed"
+else
+    echo "  [FAIL] sync-to-ra.timer not found"
     ERRORS=$((ERRORS+1))
 fi
 
@@ -233,6 +257,7 @@ echo "  Python venv:  /opt/pipeline/venv"
 echo "  Environment:  /opt/pipeline/.env"
 echo "  Logs:         $LOG_DIR"
 echo "  Service:      transfer-worker.service"
+echo "  RA Sync:      sync-to-ra.timer (every 5 min)"
 echo ""
 
 if [[ $ERRORS -gt 0 ]]; then
@@ -243,11 +268,14 @@ fi
 echo "Next steps:"
 echo "  1. Verify .env has correct S3 credentials: cat /opt/pipeline/.env"
 echo "  2. Verify SSH to tt-zrh: sudo -u ubuntu ssh tt-zrh 'ls /mnt/hub/export/sound_buffer/'"
-echo "  3. Start the service:"
+echo "  3. Start the services:"
 echo "       sudo systemctl enable --now transfer-worker"
+echo "       sudo systemctl enable --now sync-to-ra.timer"
 echo ""
 echo "Monitor:"
 echo "  journalctl -u transfer-worker -f"
+echo "  journalctl -u sync-to-ra -f"
+echo "  systemctl list-timers sync-to-ra.timer"
 echo ""
 echo "Health check:"
 echo "  /opt/pipeline/check-health.sh"
