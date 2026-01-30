@@ -12,20 +12,33 @@ Tests the complete processing pipeline:
 7. Verifies S3 processed uploads
 8. Cleans up test data
 
+With --with-transfer, tests from the transfer stage using real files on AWS EC2:
+1. Checks SSH connectivity to tt-zrh
+2. Discovers or selects a source file on the remote host
+3. Transfers the file via SCP to local staging
+4. Uploads to S3
+5. Pushes job to Redis unpack queue
+6. Monitors and verifies through unpack stage (no GPU)
+
 Prerequisites:
 - ffmpeg installed (for generating test audio)
 - All services running (redis, postgres, unpack-worker, gpu-worker)
 - Environment variables configured (S3, Redis, Postgres)
+- For --with-transfer: SSH access to tt-zrh configured
 
 Usage:
     python -m tests.test_integration
     python -m tests.test_integration --keep-data
     python -m tests.test_integration --timeout 600
+    python -m tests.test_integration --with-transfer
+    python -m tests.test_integration --with-transfer --source-file /mnt/hub/export/sound_buffer/archive.tar
+    python -m tests.test_integration --with-transfer --skip-gpu-verify
 """
 
 import argparse
 import json
 import os
+import shutil
 import subprocess
 import sys
 import tarfile
@@ -38,7 +51,7 @@ from pathlib import Path
 # Add src to path for imports
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-from src.config import REDIS, S3, POSTGRES
+from src.config import AWS, REDIS, S3, POSTGRES, LOCAL
 
 
 class IntegrationTest:
@@ -50,17 +63,25 @@ class IntegrationTest:
         keep_data: bool = False,
         num_files: int = 2,
         audio_duration: int = 5,
+        with_transfer: bool = False,
+        source_file: str = None,
+        skip_gpu_verify: bool = False,
     ):
         self.timeout = timeout
         self.keep_data = keep_data
         self.num_files = num_files
         self.audio_duration = audio_duration
+        self.with_transfer = with_transfer
+        self.source_file = source_file
+        self.skip_gpu_verify = skip_gpu_verify or with_transfer
 
         self.batch_id = f"test_{uuid.uuid4().hex[:8]}"
         self.s3_key = f"archives/{self.batch_id}.tar"
         self.test_files = []
         self.temp_dir = None
         self.created_audio_ids = []
+        self.staging_dir = None
+        self.transferred_file = None
 
     def log(self, msg: str, level: str = "INFO"):
         """Print timestamped log message."""
@@ -154,6 +175,270 @@ class IntegrationTest:
 
         client.lpush(REDIS["QUEUES"]["UNPACK"], json.dumps(job))
         self.log(f"Job queued: batch_id={self.batch_id}", "OK")
+
+    def check_ssh_connectivity(self) -> bool:
+        """Verify SSH connectivity to tt-zrh."""
+        self.log("Checking SSH connectivity to tt-zrh...")
+
+        ssh_config = str(AWS["SSH_CONFIG_FILE"])
+        cmd = ["ssh", "-F", ssh_config, "-o", "ConnectTimeout=10", AWS["HOST"], "echo", "ok"]
+
+        try:
+            result = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
+            if result.returncode == 0 and "ok" in result.stdout:
+                self.log("SSH connectivity to tt-zrh verified", "OK")
+                return True
+            else:
+                self.log(f"SSH check failed: rc={result.returncode}, stderr={result.stderr.strip()}", "FAIL")
+                return False
+        except subprocess.TimeoutExpired:
+            self.log("SSH connectivity check timed out", "FAIL")
+            return False
+        except Exception as e:
+            self.log(f"SSH connectivity check error: {e}", "FAIL")
+            return False
+
+    def discover_source_file(self) -> str:
+        """
+        Discover a source file on tt-zrh to use for testing.
+
+        Uses list_files() from transfer_sounds to find archives in the
+        remote source directory.
+
+        Returns:
+            Full path to a source file on the remote host.
+
+        Raises:
+            RuntimeError: If no files are found.
+        """
+        if self.source_file:
+            self.log(f"Using specified source file: {self.source_file}")
+            from src.transfer_sounds import file_exists
+            if not file_exists(self.source_file, AWS["HOST"]):
+                raise RuntimeError(f"Specified source file does not exist: {self.source_file}")
+            return self.source_file
+
+        self.log(f"Discovering source files on {AWS['HOST']}:{AWS['SOURCE_DIR']}...")
+
+        from src.transfer_sounds import list_files
+
+        files = list_files(AWS["SOURCE_DIR"], AWS["HOST"], latency_min=10)
+        # Filter out lock files
+        files = [f for f in files if f and not f.endswith(".lock")]
+
+        if not files:
+            raise RuntimeError(
+                f"No source files found on {AWS['HOST']}:{AWS['SOURCE_DIR']}. "
+                "Use --source-file to specify a file path explicitly."
+            )
+
+        selected = files[0]
+        self.log(f"Found {len(files)} file(s), selected: {selected}", "OK")
+        return selected
+
+    def transfer_from_aws(self, source_path: str) -> Path:
+        """
+        Transfer a file from tt-zrh to local staging via SCP.
+
+        Uses transfer_sound_zrh() with remove=False to preserve the source.
+
+        Args:
+            source_path: Full path to the file on the remote host.
+
+        Returns:
+            Path to the local transferred file.
+
+        Raises:
+            RuntimeError: If the transfer fails.
+        """
+        self.log(f"Transferring {os.path.basename(source_path)} from {AWS['HOST']}...")
+
+        from src.transfer_sounds import transfer_sound_zrh, setup_logger as transfer_setup_logger
+
+        # Create a local staging directory
+        self.staging_dir = tempfile.mkdtemp(prefix="pipeline_test_staging_")
+        self.log(f"  Staging directory: {self.staging_dir}")
+
+        # Set up a logger for the transfer function
+        logger = transfer_setup_logger(
+            "test_transfer", log_directory="", to_stdout=True
+        )
+
+        result = transfer_sound_zrh(
+            source_path=source_path,
+            dest_path=self.staging_dir,
+            source_host=AWS["HOST"],
+            secure=True,
+            logger=logger,
+            remove=False,
+        )
+
+        if not result:
+            raise RuntimeError(f"Transfer failed for {source_path}")
+
+        filename = os.path.basename(source_path)
+        local_path = Path(self.staging_dir) / filename
+        if not local_path.exists():
+            raise RuntimeError(f"Transfer reported success but file not found: {local_path}")
+
+        file_size = local_path.stat().st_size
+        self.transferred_file = local_path
+        self.log(f"  Transferred: {filename} ({file_size / 1024 / 1024:.1f} MB)", "OK")
+        return local_path
+
+    def verify_unpack_results(self) -> dict:
+        """
+        Verify results through the unpack stage (no GPU verification).
+
+        Checks:
+        1. S3 archive was uploaded (HEAD object check)
+        2. Redis batch tracking keys were set
+        3. Jobs appeared on list:transcribe queue
+        4. Scratch directory contains converted .opus files
+
+        Returns:
+            Dict with verification results.
+        """
+        self.log("Verifying unpack results (no GPU)...")
+
+        results = {
+            "s3_archive": False,
+            "redis_batch_total": False,
+            "transcribe_queue_jobs": 0,
+            "opus_files": 0,
+            "errors": [],
+        }
+
+        # 1. Check S3 archive exists
+        try:
+            from src.s3_utils import get_archive_size
+            size = get_archive_size(self.s3_key)
+            if size and size > 0:
+                results["s3_archive"] = True
+                self.log(f"  S3 archive exists: {self.s3_key} ({size / 1024 / 1024:.1f} MB)", "OK")
+            else:
+                self.log(f"  S3 archive not found: {self.s3_key}", "FAIL")
+        except Exception as e:
+            results["errors"].append(f"S3 check: {e}")
+            self.log(f"  S3 archive check error: {e}", "FAIL")
+
+        # 2. Check Redis batch tracking keys
+        try:
+            import redis
+            client = redis.Redis(
+                host=REDIS["HOST"], port=REDIS["PORT"], decode_responses=True
+            )
+
+            total = client.get(f"batch:{self.batch_id}:total")
+            processed = client.get(f"batch:{self.batch_id}:processed")
+            s3_key = client.get(f"batch:{self.batch_id}:s3_key")
+
+            if total is not None:
+                results["redis_batch_total"] = True
+                self.log(f"  Redis batch:total = {total}", "OK")
+            else:
+                self.log("  Redis batch:total not set", "FAIL")
+
+            self.log(f"  Redis batch:processed = {processed}")
+            self.log(f"  Redis batch:s3_key = {s3_key}")
+
+            # 3. Check transcribe queue for jobs from this batch
+            queue_len = client.llen(REDIS["QUEUES"]["TRANSCRIBE"])
+            results["transcribe_queue_jobs"] = queue_len
+            if queue_len > 0:
+                self.log(f"  Transcribe queue depth: {queue_len}", "OK")
+            else:
+                self.log("  Transcribe queue is empty (unpack may still be running)", "WARN")
+
+        except Exception as e:
+            results["errors"].append(f"Redis check: {e}")
+            self.log(f"  Redis check error: {e}", "FAIL")
+
+        # 4. Check scratch directory for opus files
+        try:
+            scratch_dir = LOCAL["SCRATCH_ROOT"] / self.batch_id
+            if scratch_dir.exists():
+                opus_files = list(scratch_dir.glob("**/*.opus"))
+                results["opus_files"] = len(opus_files)
+                if opus_files:
+                    self.log(f"  Scratch opus files: {len(opus_files)}", "OK")
+                    for f in opus_files[:5]:
+                        self.log(f"    {f.name} ({f.stat().st_size / 1024:.1f} KB)")
+                    if len(opus_files) > 5:
+                        self.log(f"    ... and {len(opus_files) - 5} more")
+                else:
+                    self.log("  No opus files in scratch directory", "WARN")
+            else:
+                self.log(f"  Scratch directory not found: {scratch_dir}", "WARN")
+        except Exception as e:
+            results["errors"].append(f"Scratch check: {e}")
+            self.log(f"  Scratch directory check error: {e}", "FAIL")
+
+        # Summary
+        self.log("=" * 50)
+        self.log("Unpack Verification Summary")
+        self.log("=" * 50)
+        self.log(f"S3 archive uploaded: {'YES' if results['s3_archive'] else 'NO'}")
+        self.log(f"Redis batch:total set: {'YES' if results['redis_batch_total'] else 'NO'}")
+        self.log(f"Transcribe queue depth: {results['transcribe_queue_jobs']}")
+        self.log(f"Opus files in scratch: {results['opus_files']}")
+
+        if results["errors"]:
+            self.log(f"Errors: {results['errors']}", "FAIL")
+
+        success = results["s3_archive"] and results["redis_batch_total"]
+        if success:
+            self.log("Unpack verifications PASSED", "OK")
+        else:
+            self.log("Unpack verifications FAILED", "FAIL")
+
+        results["success"] = success
+        return results
+
+    def wait_for_unpack_completion(self) -> bool:
+        """
+        Wait for the unpack stage to complete (no GPU).
+
+        Considers the unpack done when batch:{id}:total is set,
+        indicating the unpack worker has processed the archive and
+        queued individual files for transcription.
+
+        Returns:
+            True if unpack completed, False if timeout.
+        """
+        self.log(f"Waiting for unpack completion (timeout: {self.timeout}s)...")
+
+        import redis
+
+        client = redis.Redis(
+            host=REDIS["HOST"], port=REDIS["PORT"], decode_responses=True
+        )
+
+        start_time = time.time()
+        last_status = None
+
+        while time.time() - start_time < self.timeout:
+            total = client.get(f"batch:{self.batch_id}:total")
+            processed = client.get(f"batch:{self.batch_id}:processed")
+            queue_depth = client.llen(REDIS["QUEUES"]["TRANSCRIBE"])
+
+            elapsed = int(time.time() - start_time)
+            status = f"total={total}, processed={processed}, transcribe_queue={queue_depth}"
+
+            if status != last_status:
+                self.log(f"[{elapsed}s] {status}", "WAIT")
+                last_status = status
+
+            # Unpack is done when batch:total is set (the unpack worker sets it
+            # after extracting the archive and queuing individual files)
+            if total is not None:
+                self.log(f"Unpack complete: {total} files extracted", "OK")
+                return True
+
+            time.sleep(5)
+
+        self.log(f"Timeout after {self.timeout}s", "FAIL")
+        return False
 
     def wait_for_completion(self) -> bool:
         """
@@ -496,9 +781,19 @@ class IntegrationTest:
 
         # Clean temp directory
         if self.temp_dir and Path(self.temp_dir).exists():
-            import shutil
             shutil.rmtree(self.temp_dir, ignore_errors=True)
             self.log(f"  Deleted temp directory: {self.temp_dir}")
+
+        # Clean staging directory (transfer mode)
+        if self.staging_dir and Path(self.staging_dir).exists():
+            shutil.rmtree(self.staging_dir, ignore_errors=True)
+            self.log(f"  Deleted staging directory: {self.staging_dir}")
+
+        # Clean scratch directory for this batch
+        scratch_dir = LOCAL["SCRATCH_ROOT"] / self.batch_id
+        if scratch_dir.exists():
+            shutil.rmtree(scratch_dir, ignore_errors=True)
+            self.log(f"  Deleted scratch directory: {scratch_dir}")
 
         self.log("Cleanup complete", "OK")
 
@@ -509,44 +804,23 @@ class IntegrationTest:
         Returns:
             True if all tests passed, False otherwise
         """
+        mode = "Transfer + Unpack" if self.with_transfer else "Full Pipeline"
         self.log("=" * 60)
-        self.log("Full Pipeline Integration Test")
+        self.log(f"{mode} Integration Test")
         self.log("=" * 60)
         self.log(f"Batch ID: {self.batch_id}")
-        self.log(f"Files: {self.num_files}")
+        if not self.with_transfer:
+            self.log(f"Files: {self.num_files}")
         self.log(f"Timeout: {self.timeout}s")
+        if self.skip_gpu_verify:
+            self.log("GPU verification: SKIPPED")
         print()
 
         try:
-            # Phase 1: Create test archive
-            archive_path = self.create_test_archive()
-            print()
-
-            # Phase 2: Upload to S3
-            self.upload_to_s3(archive_path)
-            print()
-
-            # Phase 3: Push to queue
-            self.push_to_queue()
-            print()
-
-            # Phase 4: Wait for completion
-            completed = self.wait_for_completion()
-            print()
-
-            if not completed:
-                self.log("Test FAILED: timeout waiting for completion", "FAIL")
-                return False
-
-            # Phase 5: Verify results
-            results = self.verify_results()
-            print()
-
-            # Phase 6: Check Redis cleanup
-            self.verify_redis_cleanup()
-            print()
-
-            return results["success"]
+            if self.with_transfer:
+                return self._run_transfer_flow()
+            else:
+                return self._run_synthetic_flow()
 
         except Exception as e:
             self.log(f"Test FAILED with exception: {e}", "FAIL")
@@ -556,6 +830,85 @@ class IntegrationTest:
 
         finally:
             self.cleanup()
+
+    def _run_transfer_flow(self) -> bool:
+        """Run the transfer-first integration test flow."""
+
+        # Phase 1: SSH connectivity check
+        if not self.check_ssh_connectivity():
+            self.log("Test FAILED: cannot reach tt-zrh via SSH", "FAIL")
+            return False
+        print()
+
+        # Phase 2: Discover source file
+        source_path = self.discover_source_file()
+        print()
+
+        # Phase 3: Transfer file from AWS
+        local_archive = self.transfer_from_aws(source_path)
+        print()
+
+        # Phase 4: Upload to S3
+        self.upload_to_s3(local_archive)
+        print()
+
+        # Phase 5: Push to unpack queue
+        self.push_to_queue()
+        print()
+
+        # Phase 6: Wait for unpack to complete
+        completed = self.wait_for_unpack_completion()
+        print()
+
+        if not completed:
+            self.log("Test FAILED: timeout waiting for unpack completion", "FAIL")
+            return False
+
+        # Phase 7: Verify unpack results
+        results = self.verify_unpack_results()
+        print()
+
+        return results["success"]
+
+    def _run_synthetic_flow(self) -> bool:
+        """Run the original synthetic audio integration test flow."""
+
+        # Phase 1: Create test archive
+        archive_path = self.create_test_archive()
+        print()
+
+        # Phase 2: Upload to S3
+        self.upload_to_s3(archive_path)
+        print()
+
+        # Phase 3: Push to queue
+        self.push_to_queue()
+        print()
+
+        # Phase 4: Wait for completion
+        if self.skip_gpu_verify:
+            completed = self.wait_for_unpack_completion()
+        else:
+            completed = self.wait_for_completion()
+        print()
+
+        if not completed:
+            self.log("Test FAILED: timeout waiting for completion", "FAIL")
+            return False
+
+        # Phase 5: Verify results
+        if self.skip_gpu_verify:
+            results = self.verify_unpack_results()
+        else:
+            results = self.verify_results()
+        print()
+
+        # Phase 6: Check Redis cleanup (only for full pipeline)
+        if not self.skip_gpu_verify:
+            self.verify_redis_cleanup()
+            print()
+
+        return results["success"]
 
 
 def main():
@@ -585,6 +938,22 @@ def main():
         default=5,
         help="Duration of test audio in seconds (default: 5)",
     )
+    parser.add_argument(
+        "--with-transfer",
+        action="store_true",
+        help="Test from transfer stage: SCP real file from tt-zrh, upload to S3, unpack",
+    )
+    parser.add_argument(
+        "--source-file",
+        type=str,
+        default=None,
+        help="Path to a specific file on tt-zrh (used with --with-transfer)",
+    )
+    parser.add_argument(
+        "--skip-gpu-verify",
+        action="store_true",
+        help="Skip DB verification of transcripts/classifications (verify unpack only)",
+    )
 
     args = parser.parse_args()
 
@@ -593,6 +962,9 @@ def main():
         keep_data=args.keep_data,
         num_files=args.num_files,
         audio_duration=args.audio_duration,
+        with_transfer=args.with_transfer,
+        source_file=args.source_file,
+        skip_gpu_verify=args.skip_gpu_verify,
     )
 
     success = test.run()
