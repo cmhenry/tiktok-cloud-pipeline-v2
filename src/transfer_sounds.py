@@ -301,79 +301,80 @@ def remove_file(path, remote_host = None, logger = None):
         return False
 
 def transfer_sound_zrh(source_path, dest_path, source_host = None, secure = True, logger = None, remove = True):
-    """Transfer a file directly from AWS to Greene via SCP with ProxyJump."""
-    
+    """Transfer a file from AWS to local via rclone SFTP (using SSH config)."""
+
     start_time = time.time()
     file_path = os.path.basename(source_path)
     dest_folder = os.path.basename(dest_path)
     source = f"{source_host}:{source_path}"
-    
+
     lock_path = f"{TRANSFER_LOCK_FOLDER}/tt-aws_zrh_{file_path.replace('/', '_')}.lock"
     lock_status = manage_lock_status(lock_path)
-    
-    
-    if not lock_status: 
+
+
+    if not lock_status:
         msg = f"\t\ttt-aws to zrh\t{dest_folder}\t{file_path}\tSkipped because of lock status"
         log_message(msg, logger)
         return False
-    else: 
+    else:
         try:
-            if secure: 
+            if secure:
                 source_size = None
                 size_try = 0
-                while source_size is None and size_try < 10: 
+                while source_size is None and size_try < 10:
                     size_try += 1
                     source_size = get_file_size(
-                        source_path, 
-                        source_host, 
+                        source_path,
+                        source_host,
                         logger = logger
                     )
-                
-                if source_size is None: 
+
+                if source_size is None:
                     log_message(f"\t\ttt-aws to zrh\t{dest_folder}\t{file_path}\t\tUnable while getting source size", logger, level="warning")
                     remove_lock_file(lock_path)
                     return False
-                
+
                 size_msg = f"{source_size/1024/1024:.1f} Mb "
-            else: 
+            else:
                 size_msg = ""
-        except Exception as e: 
+        except Exception as e:
             log_message(f"\t\ttt-aws to zrh\t{dest_folder}\t{file_path}\t\tError while getting source size\t{e}", logger, level="error")
             remove_lock_file(lock_path)
             return False
-        
+
         log_first_part = f"\t\ttt-aws to zrh\t{dest_folder}\t{file_path}\t\t{size_msg}\t"
         log_message(log_first_part, logger)
-        
-        try: 
-            # Use ProxyJump to chain AWS and Greene connections
+
+        try:
+            # Use rclone SFTP backend with the existing SSH config
             cmd = [
-                "scp",
-                "-3", 
-                "-q",
-                "-F", SSH_CONFIG_FILE,
-                source,
-                dest_path
+                "rclone", "copy",
+                f":sftp:{source_path}",
+                dest_path,
+                "--sftp-host", source_host,
+                "--sftp-ssh", SSH_CONFIG_FILE,
+                "--transfers", "1",
+                "--quiet",
             ]
-            
-            try: 
+
+            try:
                 subprocess.run(
                     cmd,
-                    stdout=subprocess.PIPE, stderr=subprocess.PIPE, 
+                    stdout=subprocess.PIPE, stderr=subprocess.PIPE,
                     text=True, check=True
                 )
             except subprocess.CalledProcessError as err:
                 msg = (
-                    f"[SSH ERROR] Copying files from {source} on tt-aws.\n"
+                    f"[RCLONE ERROR] Copying files from {source}.\n"
                     f"Return code: {err.returncode}\n"
                     f"STDERR: {err.stderr}"
                 )
                 log_message(msg, logger, level = "error")
                 remove_lock_file(lock_path)
                 return False
-            
+
             except OSError as err:
-                msg = f"[OS ERROR] Copying files from {source} on tt-aws.\n"
+                msg = f"[OS ERROR] Copying files from {source}.\n"
                 log_message(msg, logger, "error")
                 remove_lock_file(lock_path)
                 return False
