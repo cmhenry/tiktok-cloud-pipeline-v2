@@ -165,6 +165,35 @@ def send_slack_text_message(text, webhook='tiktok_monitor'):
         print(f"{response.status_code}: {response.text}")
 
 
+def parse_ssh_config(config_path, host_alias):
+    """Parse an SSH config file and return settings for the given Host alias.
+
+    Returns dict with keys like HostName, User, Port, IdentityFile.
+    """
+    result = {}
+    in_block = False
+
+    with open(config_path) as f:
+        for line in f:
+            line = line.strip()
+            if not line or line.startswith("#"):
+                continue
+            key, _, value = line.partition(" ")
+            value = value.strip()
+
+            if key.lower() == "host":
+                in_block = (value == host_alias)
+                continue
+
+            if in_block:
+                result[key] = value
+
+    # Expand ~ in paths (e.g., IdentityFile ~/.ssh/id_rsa)
+    if "IdentityFile" in result:
+        result["IdentityFile"] = os.path.expanduser(result["IdentityFile"])
+
+    return result
+
 def file_exists(path, remote_host=None, logger=None):
     try:
         
@@ -351,16 +380,21 @@ def transfer_sound_zrh(source_path, dest_path, source_host = None, secure = True
         log_message(log_first_part, logger)
 
         try:
-            # Use rclone SFTP backend with the existing SSH config
+            # Use rclone SFTP backend with settings parsed from SSH config
+            ssh_opts = parse_ssh_config(SSH_CONFIG_FILE, source_host)
             cmd = [
                 "rclone", "copy",
                 f":sftp:{source_path}",
                 dest_path,
-                "--sftp-host", source_host,
-                "--sftp-ssh", f"ssh -F {SSH_CONFIG_FILE}",
+                "--sftp-host", ssh_opts.get("HostName", source_host),
+                "--sftp-user", ssh_opts.get("User", "ec2-user"),
                 "--transfers", "1",
                 "--quiet",
             ]
+            if "IdentityFile" in ssh_opts:
+                cmd.extend(["--sftp-key-file", ssh_opts["IdentityFile"]])
+            if "Port" in ssh_opts:
+                cmd.extend(["--sftp-port", ssh_opts["Port"]])
 
             try:
                 subprocess.run(
