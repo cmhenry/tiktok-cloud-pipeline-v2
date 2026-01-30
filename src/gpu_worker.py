@@ -312,7 +312,7 @@ class GPUWorker:
 
             # 7. Upload opus to S3 (NEW)
             date_str = datetime.utcnow().strftime("%Y-%m-%d")
-            s3_opus_key = upload_opus(opus_path, audio_id, date_str)
+            s3_opus_key = upload_opus(opus_path, audio_id, date_str, original_filename)
 
             # 8. Update DB with S3 path (NEW)
             update_audio_s3_path(audio_id, s3_opus_key)

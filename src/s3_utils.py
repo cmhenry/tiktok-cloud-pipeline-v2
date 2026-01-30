@@ -213,17 +213,21 @@ def download_archive(s3_key: str, batch_id: str) -> Path:
     return local_path
 
 
-def upload_opus(local_path: Path, audio_id: int, date_str: str) -> str:
+def upload_opus(local_path: Path, audio_id: int, date_str: str, original_filename: str = "") -> str:
     """
     Upload processed opus file to S3 for long-term storage.
+
+    Uses the original MP3 filename stem (meta_id) as the S3 object name
+    so that files remain identifiable and matchable to parquet metadata.
 
     Args:
         local_path: Path to local opus file
         audio_id: Database ID of audio file
         date_str: Date string in YYYY-MM-DD format
+        original_filename: Original MP3 filename (e.g. "abc123.mp3")
 
     Returns:
-        S3 key: "processed/{date_str}/{audio_id}.opus"
+        S3 key: "processed/{date_str}/{meta_id}.opus"
 
     Raises:
         FileNotFoundError: If local file doesn't exist
@@ -233,10 +237,13 @@ def upload_opus(local_path: Path, audio_id: int, date_str: str) -> str:
     if not local_path.exists():
         raise FileNotFoundError(f"Opus file not found: {local_path}")
 
-    s3_key = f"{S3['PROCESSED_PREFIX']}{date_str}/{audio_id}.opus"
+    # Use original filename stem (meta_id) to preserve linkage to parquet metadata.
+    # Fall back to audio_id for backwards compatibility.
+    stem = Path(original_filename).stem if original_filename else str(audio_id)
+    s3_key = f"{S3['PROCESSED_PREFIX']}{date_str}/{stem}.opus"
     client = get_s3_client()
 
-    logger.debug(f"Uploading opus {audio_id} to s3://{S3['BUCKET']}/{s3_key}")
+    logger.debug(f"Uploading opus {audio_id} ({stem}) to s3://{S3['BUCKET']}/{s3_key}")
 
     client.upload_file(str(local_path), S3["BUCKET"], s3_key)
 
