@@ -57,7 +57,8 @@ POSTGRES = {
 # AWS transfer settings
 AWS = {
     "HOST": "tt-zrh",                              # SSH config alias
-    "SOURCE_DIR": "/mnt/hub/export/sound_buffer",
+    "AUDIO_SOURCE_DIR": "/mnt/zurich/sound",       # Tar archives with MP3 files
+    "METADATA_SOURCE_DIR": "/mnt/zurich/metadata", # Individual <meta_id>.txt files
     "SSH_CONFIG_FILE": Path.home() / ".ssh" / "config",
     "FILE_LATENCY_MIN": 10,                        # Only grab files >10 min old
     "TRANSFER_BATCH": 50,                          # Max files per cycle
@@ -97,6 +98,7 @@ PROCESSING = {
     "COPE_POLICY": Path(__file__).parent / "tiktok_policy.txt",
     "FFMPEG_WORKERS": int(os.getenv("FFMPEG_WORKERS", "4")),
     "OPUS_BITRATE": os.getenv("OPUS_BITRATE", "16k"),
+    "METADATA_FORMAT": os.getenv("METADATA_FORMAT", "txt"),  # "txt" or "parquet"
 }
 
 # Logging settings

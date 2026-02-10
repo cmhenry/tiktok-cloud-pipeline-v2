@@ -13,6 +13,8 @@ import logging.handlers
 import requests, json
 import subprocess
 import re
+import shutil
+import tarfile
 import tempfile
 import uuid
 import argparse
@@ -455,6 +457,148 @@ def transfer_sound_zrh(source_path, dest_path, source_host = None, secure = True
             remove_lock_file(lock_path)
             return False
 
+
+def list_tar_contents(tar_path: str, remote_host: str = None, logger=None) -> list:
+    """
+    List MP3 file stems (meta_ids) inside a remote tar archive.
+
+    Uses 'tar -tf' over SSH to list contents without downloading.
+
+    Args:
+        tar_path: Path to tar archive on remote host
+        remote_host: SSH host alias (e.g., "tt-zrh")
+        logger: Logger instance
+
+    Returns:
+        List of meta_id strings (MP3 filename stems without extension)
+    """
+    try:
+        if remote_host is not None:
+            cmd = [
+                "ssh",
+                "-F", SSH_CONFIG_FILE,
+                remote_host,
+                f"tar -tf '{tar_path}'"
+            ]
+        else:
+            cmd = ["tar", "-tf", tar_path]
+
+        result = subprocess.run(cmd, capture_output=True, text=True, check=True)
+
+        meta_ids = []
+        for line in result.stdout.strip().split('\n'):
+            if line.lower().endswith('.mp3'):
+                # Extract stem: "path/to/abc123.mp3" -> "abc123"
+                stem = Path(line).stem
+                meta_ids.append(stem)
+
+        return meta_ids
+
+    except subprocess.CalledProcessError as err:
+        if logger:
+            log_message(f"Failed to list tar contents for {tar_path}: {err.stderr}", logger, level="error")
+        return []
+    except Exception as e:
+        if logger:
+            log_message(f"Error listing tar contents for {tar_path}: {e}", logger, level="error")
+        return []
+
+
+def fetch_metadata_files(
+    meta_ids: list,
+    local_staging_dir: str,
+    remote_host: str = None,
+    logger=None
+) -> dict:
+    """
+    Fetch metadata TXT files for given meta_ids from remote metadata directory.
+
+    Args:
+        meta_ids: List of meta_id strings to fetch
+        local_staging_dir: Local directory to download files to
+        remote_host: SSH host alias
+        logger: Logger instance
+
+    Returns:
+        Dict mapping meta_id -> local Path for successfully fetched files
+    """
+    fetched = {}
+    metadata_subdir = Path(local_staging_dir) / "metadata"
+    metadata_subdir.mkdir(parents=True, exist_ok=True)
+
+    for meta_id in meta_ids:
+        remote_path = f"{METADATA_SOURCE_FOLDER}/{meta_id}.txt"
+        local_path = metadata_subdir / f"{meta_id}.txt"
+
+        # Check if file exists remotely
+        if not file_exists(remote_path, remote_host, logger):
+            if logger:
+                log_message(f"Metadata file not found: {remote_path}", logger, level="debug")
+            continue
+
+        # Use SCP to fetch individual file
+        try:
+            cmd = [
+                "scp",
+                "-F", SSH_CONFIG_FILE,
+                f"{remote_host}:{remote_path}",
+                str(local_path)
+            ]
+            subprocess.run(cmd, capture_output=True, text=True, check=True)
+            fetched[meta_id] = local_path
+
+        except subprocess.CalledProcessError as err:
+            if logger:
+                log_message(f"Failed to fetch metadata {meta_id}: {err.stderr}", logger, level="warning")
+
+    if logger and meta_ids:
+        log_message(f"Fetched {len(fetched)}/{len(meta_ids)} metadata files", logger)
+
+    return fetched
+
+
+def bundle_metadata_into_tar(
+    tar_path: Path,
+    metadata_files: dict,
+    logger=None
+) -> bool:
+    """
+    Append metadata TXT files into an existing tar archive.
+
+    Creates a 'metadata/' subdirectory inside the archive containing
+    all the TXT files.
+
+    Args:
+        tar_path: Path to existing tar archive
+        metadata_files: Dict mapping meta_id -> local TXT file path
+        logger: Logger instance
+
+    Returns:
+        True if bundling succeeded
+    """
+    if not metadata_files:
+        if logger:
+            log_message("No metadata files to bundle", logger, level="debug")
+        return True  # Not an error, just nothing to do
+
+    try:
+        # Open existing tar in append mode
+        with tarfile.open(tar_path, 'a') as tar:
+            for meta_id, txt_path in metadata_files.items():
+                if Path(txt_path).exists():
+                    # Add with arcname to place in metadata/ subdirectory
+                    tar.add(txt_path, arcname=f"metadata/{meta_id}.txt")
+
+        if logger:
+            log_message(f"Bundled {len(metadata_files)} metadata files into {tar_path.name}", logger)
+        return True
+
+    except Exception as e:
+        if logger:
+            log_message(f"Failed to bundle metadata into tar: {e}", logger, level="error")
+        return False
+
+
 ###### Configuration from shared config module #####
 
 # Redis for pipeline queue (from config.py)
@@ -507,8 +651,9 @@ INTERACTIVE = hasattr(sys, 'ps1')
 TO_SDTOUT = False
 if INTERACTIVE:
 	TO_SDTOUT = True
-# This is where the audio files are on the AWS VM (from config.py)
-SOURCE_FOLDER = AWS["SOURCE_DIR"]
+# Source directories on the AWS VM (from config.py)
+AUDIO_SOURCE_FOLDER = AWS["AUDIO_SOURCE_DIR"]
+METADATA_SOURCE_FOLDER = AWS["METADATA_SOURCE_DIR"]
 # The script is started once every hour five minutes after the hour
 MINUTE_TO_RESTART_SCRIPT = 5
 AWS_CONTENT_VM_HOST = AWS["HOST"]
@@ -563,7 +708,7 @@ def main():
 
         start_time = time.time()
 
-        source_files = [i for i in list_files(SOURCE_FOLDER, AWS_CONTENT_VM_HOST, latency_min=10, logger=logger) if not i.endswith(".lock")]
+        source_files = [i for i in list_files(AUDIO_SOURCE_FOLDER, AWS_CONTENT_VM_HOST, latency_min=10, logger=logger) if not i.endswith(".lock")]
 
         files_copied = 0
         files_skipped = 0
@@ -611,9 +756,36 @@ def main():
                     files_skipped += 1
                     continue
 
-                # Transfer to local staging succeeded - now upload to S3
+                # Transfer to local staging succeeded - now fetch and bundle metadata
                 local_archive_path = Path(TEMP_STAGING_DIR) / os.path.basename(source_file)
                 batch_id = generate_batch_id(filename)
+
+                # List tar contents to get meta_ids for metadata lookup
+                meta_ids = list_tar_contents(source_file, AWS_CONTENT_VM_HOST, logger=logger)
+                if meta_ids:
+                    log_message(f"\t\tFound {len(meta_ids)} audio files in archive, fetching metadata", logger)
+
+                    # Fetch corresponding metadata TXT files
+                    metadata_files = fetch_metadata_files(
+                        meta_ids=meta_ids,
+                        local_staging_dir=TEMP_STAGING_DIR,
+                        remote_host=AWS_CONTENT_VM_HOST,
+                        logger=logger
+                    )
+
+                    # Bundle metadata into tar archive
+                    if metadata_files:
+                        bundle_result = bundle_metadata_into_tar(
+                            tar_path=local_archive_path,
+                            metadata_files=metadata_files,
+                            logger=logger
+                        )
+                        if not bundle_result:
+                            log_message(f"\t\tFailed to bundle metadata, continuing without it", logger, level="warning")
+                else:
+                    log_message(f"\t\tNo MP3 files found in archive listing", logger, level="warning")
+                    meta_ids = []  # Ensure meta_ids is defined
+                    metadata_files = {}
 
                 try:
                     # 3. Upload to S3
@@ -645,6 +817,16 @@ def main():
                             lock_path = f"{TRANSFER_LOCK_FOLDER}/tt-aws_zrh_{filename.replace('/', '_')}.lock"
                             remove_lock_file(lock_path)
 
+                        # Also delete source metadata files from EC2
+                        if meta_ids:
+                            deleted_meta = 0
+                            for meta_id in meta_ids:
+                                metadata_path = f"{METADATA_SOURCE_FOLDER}/{meta_id}.txt"
+                                if remove_file(metadata_path, AWS_CONTENT_VM_HOST, logger=logger) is not False:
+                                    deleted_meta += 1
+                            if deleted_meta > 0:
+                                log_message(f"\t\tDeleted {deleted_meta} metadata files from EC2", logger, level="debug")
+
                     # 4. Queue for unpacking pipeline with new JSON format
                     if redis_client:
                         job = {
@@ -662,6 +844,14 @@ def main():
                         log_message(f"\t\tCleaned up local staging file: {filename}", logger, level="debug")
                     except Exception as cleanup_err:
                         log_message(f"\t\tWarning: Failed to cleanup staging file {filename}: {cleanup_err}", logger, level="warning")
+
+                    # Clean up metadata staging directory
+                    metadata_staging = Path(TEMP_STAGING_DIR) / "metadata"
+                    if metadata_staging.exists():
+                        try:
+                            shutil.rmtree(metadata_staging)
+                        except Exception:
+                            pass  # Best effort cleanup
 
                     files_copied += 1
 

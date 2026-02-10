@@ -13,6 +13,7 @@ S3 Flow:
 6. Delete archive (keep opus for GPU worker)
 """
 
+import csv
 import json
 import subprocess
 import tarfile
@@ -81,6 +82,73 @@ def load_parquet_metadata(scratch_dir: Path) -> dict:
         except Exception as e:
             logger.warning(f"Failed to parse parquet {pq_file}: {e}")
 
+    return metadata
+
+
+def load_txt_metadata(scratch_dir: Path) -> dict:
+    """
+    Load all TXT metadata files from archive and build meta_id -> row lookup.
+
+    TXT files are comma-delimited with a header row. Each file is named
+    <meta_id>.txt and matches the corresponding MP3 filename stem.
+
+    Args:
+        scratch_dir: Directory containing extracted archive contents
+
+    Returns:
+        Dict mapping meta_id (str) to full row dict containing all columns
+    """
+    metadata = {}
+
+    # Look in metadata/ subdirectory first (where transfer worker bundles them)
+    metadata_dir = scratch_dir / "metadata"
+    if metadata_dir.exists():
+        txt_files = list(metadata_dir.glob("*.txt"))
+    else:
+        # Fallback: look for .txt files anywhere in scratch_dir
+        txt_files = list(scratch_dir.rglob("*.txt"))
+
+    if not txt_files:
+        logger.debug(f"No metadata TXT files found in {scratch_dir}")
+        return metadata
+
+    for txt_file in txt_files:
+        meta_id = txt_file.stem  # filename without extension
+
+        try:
+            with open(txt_file, 'r', encoding='utf-8') as f:
+                reader = csv.DictReader(f)  # Uses first row as headers
+
+                # TXT file should contain exactly one data row
+                rows = list(reader)
+                if not rows:
+                    logger.warning(f"Empty metadata file: {txt_file.name}")
+                    continue
+
+                row = rows[0]  # Take first row
+
+                # Convert numeric strings to appropriate types
+                for key, value in list(row.items()):
+                    if value is not None and value != '':
+                        # Try to convert to int/float if appropriate
+                        try:
+                            if '.' in str(value):
+                                row[key] = float(value)
+                            else:
+                                row[key] = int(value)
+                        except (ValueError, TypeError):
+                            pass  # Keep as string
+
+                # Ensure meta_id column exists in row data
+                if 'meta_id' not in row:
+                    row['meta_id'] = meta_id
+
+                metadata[meta_id] = row
+
+        except Exception as e:
+            logger.warning(f"Failed to parse metadata {txt_file.name}: {e}")
+
+    logger.debug(f"Loaded {len(metadata)} metadata records from TXT files")
     return metadata
 
 
@@ -228,11 +296,14 @@ def process_job(job: dict, redis_client) -> dict:
             stats["failed"] = -1  # Indicate extraction failure
             raise RuntimeError(f"Failed to extract archive for batch {batch_id}")
 
-        # 3. Load parquet metadata (if present in archive)
-        parquet_metadata = load_parquet_metadata(scratch_dir)
+        # 3. Load metadata (format configured via PROCESSING["METADATA_FORMAT"])
+        if PROCESSING.get("METADATA_FORMAT") == "parquet":
+            parquet_metadata = load_parquet_metadata(scratch_dir)
+        else:
+            parquet_metadata = load_txt_metadata(scratch_dir)
         if parquet_metadata:
-            logger.info(f"Batch {batch_id}: loaded {len(parquet_metadata)} parquet metadata records")
-        stats["parquet_records"] = len(parquet_metadata)
+            logger.info(f"Batch {batch_id}: loaded {len(parquet_metadata)} metadata records")
+        stats["metadata_records"] = len(parquet_metadata)
 
         # 5. Find all MP3 files
         mp3_files = list(scratch_dir.rglob("*.mp3"))
