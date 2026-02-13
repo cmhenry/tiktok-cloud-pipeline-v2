@@ -26,7 +26,7 @@ from typing import Optional
 import pyarrow.parquet as pq
 
 from .config import LOCAL, REDIS, PROCESSING
-from .s3_utils import download_archive, cleanup_scratch
+from .s3_utils import download_archive, delete_archive, cleanup_scratch
 from .utils import setup_logger, get_redis_client, detect_archive_type, get_audio_duration
 
 logger = setup_logger("unpack_worker")
@@ -397,6 +397,9 @@ def process_job(job: dict, redis_client) -> dict:
             logger.debug(f"Batch {batch_id}: deleted archive from scratch")
         except Exception as e:
             logger.warning(f"Batch {batch_id}: failed to delete archive: {e}")
+
+        # Delete archive from S3 — fully consumed after successful extraction
+        delete_archive(s3_key)
 
         # Delete extracted MP3 files (no longer needed)
         for mp3_path in mp3_files:
