@@ -61,21 +61,20 @@ def main():
         print("\nDry run — no objects were deleted. Re-run with --confirm to delete.")
         return
 
-    # S3 delete_objects accepts up to 1000 keys per request
+    # Use single delete_object calls — Ceph RGW rejects the batch
+    # delete_objects POST with v2 signatures (SignatureDoesNotMatch).
     deleted = 0
-    for i in range(0, len(keys_to_delete), 1000):
-        batch = keys_to_delete[i : i + 1000]
-        resp = delete_client.delete_objects(
-            Bucket=bucket,
-            Delete={"Objects": [{"Key": k} for k in batch], "Quiet": True},
-        )
-        errors = resp.get("Errors", [])
-        if errors:
-            for err in errors:
-                print(f"  ERROR deleting {err['Key']}: {err['Message']}", file=sys.stderr)
-        deleted += len(batch) - len(errors)
+    errors = 0
+    for key in keys_to_delete:
+        try:
+            delete_client.delete_object(Bucket=bucket, Key=key)
+            deleted += 1
+            print(f"  deleted {key}")
+        except Exception as e:
+            errors += 1
+            print(f"  ERROR deleting {key}: {e}", file=sys.stderr)
 
-    print(f"\nDeleted {deleted} object(s). Preserved folder markers: {PRESERVE_KEYS}")
+    print(f"\nDeleted {deleted} object(s), {errors} error(s). Preserved folder markers: {PRESERVE_KEYS}")
 
 
 if __name__ == "__main__":
